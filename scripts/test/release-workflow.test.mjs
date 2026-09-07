@@ -178,6 +178,13 @@ test("every build leg validates its asset set before anything is uploaded", () =
   );
 });
 
+test("macOS release verification requires the signed update manifest before upload", () => {
+  const source = workflow();
+  const verify = source.slice(source.indexOf("- name: Verify installer asset set"), source.indexOf("- name: Namespace update metadata"));
+  assert.match(verify, /matrix\.platform == 'macos' && '-- --require-macos-signature'/);
+  assert.ok(source.indexOf("Sign macOS GitHub update manifest") < source.indexOf("Verify installer asset set"));
+});
+
 // #187 / RELEASING.md Phase 4. Each of these was verified by hand for v0.1.0
 // and gated by nothing; a hand proof does not run on the next release.
 test("#187 a lightweight tag is refused before anything is built", () => {
