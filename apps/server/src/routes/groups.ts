@@ -13,6 +13,7 @@ import {
   turnEngines,
 } from "@roleweave/shared";
 import type {
+  GroupExecutionMode,
   GroupTimeline,
   GroupTimelineItem,
   TurnEngine,
@@ -21,7 +22,8 @@ import type {
 import type { ControlPlaneContext } from "../context.js";
 import { readJsonBody, sendJson } from "../http.js";
 import { MAX_GROUP_MEMBERS, assertConversationRef } from "../groups/store.js";
-import { assertPositionExists, executeTurn } from "./turns.js";
+import { assertPositionExists, assertTurnWorkspace, executeTurn, type GroupEventAttribution } from "./turns.js";
+import { createTurnEnvelope } from "../turns/envelope.js";
 
 const MAX_INPUT_BYTES = 256 * 1024;
 
@@ -71,12 +73,12 @@ function parseAddMember(raw: unknown): string {
   return raw.positionId;
 }
 
-function parseGroupTurn(raw: unknown): { input: string; engine: TurnEngine; mentions: string[] } {
-  if (!isRecord(raw) || !exactKeys(raw, ["input", "engine", "mentions"])) {
+function parseGroupTurn(raw: unknown): { input: string; engine: TurnEngine; mentions: string[]; mode: GroupExecutionMode } {
+  if (!isRecord(raw) || (!exactKeys(raw, ["input", "engine", "mentions"]) && !exactKeys(raw, ["input", "engine", "mentions", "mode"]))) {
     throw new OrgApiError(
       errorCodes.group_request_invalid,
       400,
-      "group turn accepts exactly input, engine, mentions",
+      "group turn accepts input, engine, mentions, and optional mode",
     );
   }
   if (
@@ -107,7 +109,10 @@ function parseGroupTurn(raw: unknown): { input: string; engine: TurnEngine; ment
       "mentions must be a non-empty unique positionId list; broadcast is not allowed",
     );
   }
-  return { input: raw.input, engine: raw.engine as TurnEngine, mentions: raw.mentions as string[] };
+  if (raw.mode !== undefined && raw.mode !== "parallel" && raw.mode !== "relay") {
+    throw new OrgApiError(errorCodes.group_request_invalid, 400, "mode must be parallel or relay");
+  }
+  return { input: raw.input, engine: raw.engine as TurnEngine, mentions: raw.mentions as string[], mode: raw.mode ?? "parallel" };
 }
 
 export async function handleGroupCreate(
@@ -115,9 +120,10 @@ export async function handleGroupCreate(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const members = parseCreate(await readJsonBody<unknown>(req));
-  for (const member of members) assertPositionExists(ctx, member);
   const workspace = ctx.workspace.requireOpen();
+  const members = parseCreate(await readJsonBody<unknown>(req));
+  assertTurnWorkspace(ctx, workspace);
+  for (const member of members) assertPositionExists(ctx, member);
   const now = new Date().toISOString();
   // AC-004 dual-form recall: a group conversation is a real #14 session,
   // anchored on the first member's position lifecycle. #116: when that member
@@ -156,9 +162,10 @@ export async function handleGroupAddMember(
   res: ServerResponse,
   conversationRef: string,
 ): Promise<void> {
-  const positionId = parseAddMember(await readJsonBody<unknown>(req));
-  assertPositionExists(ctx, positionId);
   const workspace = ctx.workspace.requireOpen();
+  const positionId = parseAddMember(await readJsonBody<unknown>(req));
+  assertTurnWorkspace(ctx, workspace);
+  assertPositionExists(ctx, positionId);
   const updated = await ctx.groupStore.addMember(
     workspace.dir,
     assertConversationRef(conversationRef),
@@ -171,7 +178,8 @@ export async function handleGroupAddMember(
 /**
  * @mention explicit routing: persist the user message, answer 202 with the
  * spawn list, then spawn one turn-envelope.v1 per mentioned member under the
- * same conversationRef. Spawns run sequentially in the background; every
+ * same conversationRef. Parallel is the default; relay follows mention order
+ * and passes only completed predecessor results to the next employee. Every
  * progress/terminal event flows over the shared SSE channel tagged with
  * groupRef/turnId/positionId for renderer split-and-aggregate.
  */
@@ -181,10 +189,12 @@ export async function handleGroupTurnPost(
   res: ServerResponse,
   conversationRef: string,
 ): Promise<void> {
-  const body = parseGroupTurn(await readJsonBody<unknown>(req));
-  const ref = assertConversationRef(conversationRef);
   const workspace = ctx.workspace.requireOpen();
+  const body = parseGroupTurn(await readJsonBody<unknown>(req));
+  assertTurnWorkspace(ctx, workspace);
+  const ref = assertConversationRef(conversationRef);
   const group = await ctx.groupStore.get(workspace.dir, ref);
+  assertTurnWorkspace(ctx, workspace);
   for (const mention of body.mentions) {
     if (!group.members.includes(mention)) {
       throw new OrgApiError(
@@ -196,23 +206,29 @@ export async function handleGroupTurnPost(
     assertPositionExists(ctx, mention);
   }
   const now = new Date().toISOString();
-  const message = await ctx.groupStore.appendMessage(workspace.dir, ref, {
-    messageId: crypto.randomUUID(),
-    input: body.input,
-    mentions: body.mentions,
-    createdAt: now,
-  });
   const spawns = body.mentions.map((positionId) => ({
     turnId: crypto.randomUUID(),
     positionId,
   }));
+  const message = await ctx.groupStore.appendMessage(workspace.dir, ref, {
+    messageId: crypto.randomUUID(),
+    input: body.input,
+    mentions: body.mentions,
+    mode: body.mode,
+    spawns,
+    engine: body.engine,
+    createdAt: now,
+  });
+  const releaseDispatch = ctx.groupStore.beginDispatch(workspace.dir, ref, message.messageId);
   sendJson(res, 202, {
     conversationRef: ref,
     messageId: message.messageId,
     spawns,
+    mode: body.mode,
   });
   void (async () => {
-    for (const spawn of spawns) {
+    const handoffs: Array<{ label: string; input: string; output: unknown }> = [];
+    const run = async (spawn: typeof spawns[number]): Promise<TurnRecord | null> => {
       const attribution = {
         groupRef: ref,
         messageId: message.messageId,
@@ -222,21 +238,89 @@ export async function handleGroupTurnPost(
       };
       ctx.bus.publish("group.turn.spawned", attribution);
       try {
-        await executeTurn(ctx, detachedResponse(), { ...body, positionId: spawn.positionId }, undefined, attribution);
-      } catch {
-        ctx.bus.publish("turn.indeterminate", {
-          turnId: spawn.turnId,
-          positionId: spawn.positionId,
-          messageId: message.messageId,
-          engine: body.engine,
-          code: "group_spawn_failed",
-          envelopeDigest: "",
-          groupRef: ref,
-          conversationRef: ref,
-        });
+        // A relay may outlive workspace navigation. Never dispatch a delayed
+        // step into whichever project happens to be open later.
+        if (ctx.workspace.active !== workspace) {
+          return await persistUnexecutedTurn(ctx, workspace.dir, body.input, attribution, "group_workspace_changed");
+        }
+        return await executeTurn(ctx, detachedResponse(), { ...body, positionId: spawn.positionId }, undefined, attribution, handoffs, workspace);
+      } catch (error) {
+        return await persistUnexecutedTurn(ctx, workspace.dir, body.input, attribution,
+          error instanceof OrgApiError && error.code === errorCodes.session_conflict ? "group_employee_busy" : "group_spawn_failed");
       }
+    };
+    if (body.mode === "parallel") {
+      // Every promise starts before we await any terminal result. One failed
+      // employee must not prevent an independent employee from starting.
+      await Promise.all(spawns.map(run));
+      return;
     }
-  })();
+    let blocked = false;
+    for (const spawn of spawns) {
+      if (blocked) {
+        await persistUnexecutedTurn(ctx, workspace.dir, body.input, {
+          groupRef: ref, messageId: message.messageId, turnId: spawn.turnId,
+          positionId: spawn.positionId, engine: body.engine,
+        }, "group_relay_blocked");
+        continue;
+      }
+      const record = await run(spawn);
+      if (record?.status !== "completed") blocked = true;
+      else handoffs.push({ label: `Completed relay step: ${spawn.positionId}`, input: body.input, output: record.output });
+    }
+  })().finally(releaseDispatch);
+}
+
+/** No engine events are invented for steps that never ran. Persist the exact
+ * spawn as indeterminate so the timeline converges even when SSE is missed. */
+async function persistUnexecutedTurn(
+  ctx: ControlPlaneContext,
+  workspace: string,
+  input: string,
+  attribution: GroupEventAttribution,
+  code: "group_relay_blocked" | "group_spawn_failed" | "group_workspace_changed" | "group_employee_busy" | "group_dispatch_interrupted",
+): Promise<TurnRecord | null> {
+  let record: TurnRecord | null = null;
+  try {
+    const now = new Date().toISOString();
+    const history = await ctx.turnStore.history(workspace, attribution.positionId, now);
+    const existing = history.turns.find((turn) => turn.turnId === attribution.turnId);
+    if (existing !== undefined && existing.status !== "running") return existing;
+    const envelope = createTurnEnvelope({
+      workspaceRef: workspace, positionId: attribution.positionId, turnId: attribution.turnId,
+      message: input, conversationRef: attribution.groupRef,
+    });
+    const running = existing ?? await ctx.turnStore.begin({
+      workspace, positionId: attribution.positionId, turnId: attribution.turnId,
+      engine: attribution.engine, message: input, envelopeDigest: envelope.envelopeDigest,
+      now, groupRef: attribution.groupRef, conversationRef: attribution.groupRef,
+    });
+    record = {
+      ...running, status: "indeterminate", updatedAt: now,
+      error: {
+        code, retryable: false,
+        message: code === "group_relay_blocked"
+          ? "This step did not run because an earlier relay step did not complete successfully."
+          : code === "group_workspace_changed"
+            ? "This step did not run because the open workspace changed."
+            : code === "group_employee_busy"
+              ? "This step did not run because this employee already has a turn in progress."
+              : code === "group_dispatch_interrupted"
+                ? "This accepted group step did not start before the control plane stopped; no automatic retry was attempted."
+                : "This group step could not start or its terminal result could not be persisted; no automatic retry was attempted.",
+      },
+    };
+    await ctx.turnStore.finish(workspace, record);
+  } catch {
+    // A storage failure cannot be made durable; preserve a scoped live error
+    // without pretending an engine ran or a terminal record was saved.
+    record = null;
+  }
+  ctx.bus.publish("turn.indeterminate", {
+    ...attribution, conversationRef: attribution.groupRef,
+    code, envelopeDigest: record?.envelopeDigest ?? "",
+  });
+  return record;
 }
 
 export async function handleGroupTimeline(
@@ -258,6 +342,20 @@ export async function handleGroupTimeline(
     }
   }
   const messages = await ctx.groupStore.readMessages(workspace.dir, ref);
+  const persistedTurnIds = new Set(memberTurns.map((turn) => turn.turnId));
+  for (const message of messages) {
+    if (ctx.groupStore.hasActiveDispatch(workspace.dir, ref, message.messageId)) continue;
+    for (const spawn of message.spawns ?? []) {
+      if (persistedTurnIds.has(spawn.turnId)) continue;
+      // No in-process dispatch owns this durable acceptance: the previous
+      // control plane stopped before it could start this step. Never replay.
+      const interrupted = await persistUnexecutedTurn(ctx, workspace.dir, message.input, {
+        ...spawn, groupRef: ref, messageId: message.messageId,
+        engine: message.engine ?? "qoder",
+      }, "group_dispatch_interrupted");
+      if (interrupted !== null) memberTurns.push(interrupted);
+    }
+  }
   const items: GroupTimelineItem[] = [
     ...messages.map((record) => ({ kind: "user" as const, ...record })),
     ...memberTurns.map((turn) => ({ kind: "member" as const, turn })),

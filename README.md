@@ -22,6 +22,8 @@ Its organizing principle is simple: **the file tree is the org chart.** Roles li
 
 For example, an open-source maintenance team can have a repository owner with three supporting roles: an issue researcher, a community operator, and a release engineer. The repository includes an [example workspace](examples/oss-maintainer) with this structure and role budgets.
 
+The source branch also adds bounded conversation context, independent employee dispatch, and explicit parallel/relay group execution. See [continuing work with an AI team](docs/thread-context-and-collaboration.md) for usage and limits. These changes are not part of the v0.1.1 installers linked below.
+
 ## Download
 
 RoleWeave is an **early preview**. The v0.1.1 release provides these desktop packages:

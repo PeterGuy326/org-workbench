@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { pickSelectOption } from "./select-helper";
 import { GroupsPanel } from "../src/groups/GroupsPanel";
@@ -251,6 +251,7 @@ describe("GroupsPanel collaboration visuals (#53)", () => {
         input: "请检查发布说明",
         engine: "qoder",
         mentions: ["repo-owner"],
+        mode: "parallel",
       });
     });
   });
@@ -398,4 +399,58 @@ describe("GroupsPanel create failure alert (#116)", () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toHaveTextContent("position already has an active session");
   });
+});
+
+it("sends explicit relay in selected order and restores mode, outputs and blocked steps from the timeline", async () => {
+  const timeline: GroupTimeline = { schemaVersion: "group-timeline.v1", conversationRef: group.conversationRef, items: [
+    { kind: "user", schemaVersion: "group-message.v1", conversationRef: group.conversationRef, messageId: "relay-old", input: "write and review", mode: "relay", mentions: ["release-engineer", "repo-owner"], createdAt: group.createdAt },
+    { kind: "member", turn: { ...completedTurn(), output: "first step draft" } },
+    { kind: "member", turn: { ...completedTurn(), turnId: "blocked", positionId: "release-engineer", status: "indeterminate", output: undefined, error: { code: "group_relay_blocked", message: "Earlier step failed", retryable: false } } },
+  ] };
+  const { bridge } = renderPanel({
+    timeline: vi.fn().mockResolvedValue({ status: 200, body: timeline }),
+    createGroupTurn: vi.fn().mockResolvedValue({ status: 202, body: { conversationRef: group.conversationRef, messageId: "relay-new", spawns: [] } }),
+  });
+  expect(await screen.findByText("first step draft")).toBeInTheDocument();
+  expect(screen.getByText("未执行：前序步骤未成功，接力已停止。")).toBeInTheDocument();
+  expect(screen.getByText(/依次接力 · Release Engineer → Repo Owner/)).toBeInTheDocument();
+  pickSelectOption("协作方式", "依次接力");
+  pickSelectOption("选择要 @ 的成员", "Release Engineer");
+  pickSelectOption("选择要 @ 的成员", "Repo Owner");
+  expect(screen.getByText(/按选择顺序执行：Release Engineer → Repo Owner/)).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "群聊消息" }), { target: { value: "next relay" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送群消息" }));
+  await waitFor(() => expect(bridge.createGroupTurn).toHaveBeenCalledWith({ conversationRef: group.conversationRef, input: "next relay", engine: "qoder", mentions: ["release-engineer", "repo-owner"], mode: "relay" }));
+});
+
+it.each(["create", "add"] as const)("does not refresh another workspace after an abandoned %s request finishes", async (action) => {
+  let finish: (value: { status: number; body: unknown }) => void = () => {};
+  const request = vi.fn(() => new Promise<{ status: number; body: unknown }>((resolve) => { finish = resolve; }));
+  const { unmount } = renderPanel(action === "create" ? { groups: [], createGroup: request } : { addGroupMember: request });
+  if (action === "create") {
+    await screen.findByRole("combobox", { name: "搜索并选择群成员" });
+    pickSelectOption("搜索并选择群成员", "Repo Owner");
+    pickSelectOption("搜索并选择群成员", "Community Operator");
+    fireEvent.click(screen.getByRole("button", { name: "创建群聊" }));
+  } else {
+    await screen.findByRole("combobox", { name: "添加员工" });
+    pickSelectOption("添加员工", "Community Operator");
+  }
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+  unmount();
+  const nextWorkspace = installBridge();
+  await act(async () => finish({ status: action === "create" ? 201 : 200, body: group }));
+  expect(nextWorkspace.groups).not.toHaveBeenCalled();
+  expect(nextWorkspace.groupTimeline).not.toHaveBeenCalled();
+});
+
+it("does not reconcile an abandoned workspace timeline into shared App state", async () => {
+  let finish: (value: unknown) => void = () => {};
+  const timeline = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+  const onReconcileTimeline = vi.fn();
+  const { unmount } = renderPanel({ timeline, onReconcileTimeline });
+  await waitFor(() => expect(timeline).toHaveBeenCalledTimes(1));
+  unmount();
+  await act(async () => finish({ status: 200, body: { schemaVersion: "group-timeline.v1", conversationRef: group.conversationRef, items: [{ kind: "member", turn: completedTurn() }] } }));
+  expect(onReconcileTimeline).not.toHaveBeenCalled();
 });

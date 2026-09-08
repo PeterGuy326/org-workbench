@@ -83,6 +83,7 @@ export interface OwbBridge {
   createSession(request: { positionId: string }): Promise<OwbApiResponse<WorkbenchSession>>;
   sessions(positionId: string): Promise<OwbApiResponse<WorkbenchSessionList>>;
   session(sessionId: string): Promise<OwbApiResponse<WorkbenchSession>>;
+  sessionSetContext(request: { sessionId: string; enabled: boolean }): Promise<OwbApiResponse<WorkbenchSession>>;
   rotateSession(sessionId: string): Promise<OwbApiResponse<WorkbenchSession>>;
   createSessionTurn(request: { sessionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval }): Promise<OwbApiResponse<TurnRecord>>;
   sessionTurnHistory(sessionId: string): Promise<OwbApiResponse<TurnHistory>>;
@@ -90,7 +91,7 @@ export interface OwbBridge {
   groups(): Promise<OwbApiResponse<GroupConversationList>>;
   group(conversationRef: string): Promise<OwbApiResponse<GroupConversation>>;
   addGroupMember(request: { conversationRef: string; positionId: string }): Promise<OwbApiResponse<GroupConversation>>;
-  createGroupTurn(request: { conversationRef: string; input: string; engine: TurnEngine; mentions: string[] }): Promise<OwbApiResponse<{ conversationRef: string; messageId: string; spawns: Array<{ turnId: string; positionId: string }> }>>;
+  createGroupTurn(request: { conversationRef: string; input: string; engine: TurnEngine; mentions: string[]; mode?: "parallel" | "relay" }): Promise<OwbApiResponse<{ conversationRef: string; messageId: string; spawns: Array<{ turnId: string; positionId: string }> }>>;
   groupTimeline(conversationRef: string): Promise<OwbApiResponse<GroupTimeline>>;
   drive: {
     list(q?: string): Promise<OwbApiResponse<DriveObjectListResponse>>;

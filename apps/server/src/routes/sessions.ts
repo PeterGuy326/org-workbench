@@ -4,7 +4,7 @@ import type { TurnEngine } from "@roleweave/shared";
 import type { ControlPlaneContext } from "../context.js";
 import { readJsonBody, sendJson } from "../http.js";
 import { assertSessionId } from "../sessions/store.js";
-import { assertPositionExists, assertPendingApproval, executeTurn } from "./turns.js";
+import { assertPositionExists, assertPendingApproval, assertTurnWorkspace, executeTurn } from "./turns.js";
 import type { TurnPendingApproval } from "@roleweave/shared";
 
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -80,9 +80,10 @@ export async function handleSessionCreate(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const positionId = parseCreate(await readJsonBody<unknown>(req));
-  assertPositionExists(ctx, positionId);
   const workspace = ctx.workspace.requireOpen();
+  const positionId = parseCreate(await readJsonBody<unknown>(req));
+  assertTurnWorkspace(ctx, workspace);
+  assertPositionExists(ctx, positionId);
   const session = await ctx.sessionStore.create(workspace.dir, positionId);
   sendJson(res, 201, session);
 }
@@ -120,8 +121,9 @@ export async function handleSessionRotate(
   res: ServerResponse,
   sessionId: string,
 ): Promise<void> {
-  parseEmpty(await readJsonBody<unknown>(req));
   const workspace = ctx.workspace.requireOpen();
+  parseEmpty(await readJsonBody<unknown>(req));
+  assertTurnWorkspace(ctx, workspace);
   const source = await ctx.sessionStore.get(workspace.dir, assertSessionId(sessionId));
   // Recover a persisted pre-restart running record before lifecycle mutation.
   // An in-process running turn remains running and is rejected by rotate.
@@ -148,12 +150,14 @@ export async function handleSessionTurnPost(
   res: ServerResponse,
   sessionId: string,
 ): Promise<void> {
-  const body = parseSessionTurn(await readJsonBody<unknown>(req));
   const workspace = ctx.workspace.requireOpen();
+  const body = parseSessionTurn(await readJsonBody<unknown>(req));
+  assertTurnWorkspace(ctx, workspace);
   const session = await ctx.sessionStore.reserveTurn(workspace.dir, assertSessionId(sessionId));
   try {
+    assertTurnWorkspace(ctx, workspace);
     assertPositionExists(ctx, session.positionId);
-    await executeTurn(ctx, res, { ...body, positionId: session.positionId }, session);
+    await executeTurn(ctx, res, { ...body, positionId: session.positionId }, session, undefined, undefined, workspace);
   } finally {
     ctx.sessionStore.releaseTurn(workspace.dir, session.sessionId);
   }
@@ -173,4 +177,21 @@ export async function handleSessionTurnHistory(
     new Date().toISOString(),
   );
   sendJson(res, 200, history);
+}
+
+/** Change the server-owned context policy for future turns; active turns keep their snapshot. */
+export async function handleSessionContextPatch(
+  ctx: ControlPlaneContext, req: IncomingMessage, res: ServerResponse, sessionId: string,
+): Promise<void> {
+  const workspace = ctx.workspace.requireOpen();
+  const body = await readJsonBody<unknown>(req);
+  assertTurnWorkspace(ctx, workspace);
+  if (!isRecord(body) || !exactKeys(body, ["enabled"]) || typeof body.enabled !== "boolean") {
+    throw new OrgApiError(errorCodes.session_request_invalid, 400, "session context accepts exactly enabled: boolean");
+  }
+  const id = assertSessionId(sessionId);
+  if (ctx.turnStore.hasActiveSessionTurns(workspace.dir, id)) {
+    throw new OrgApiError(errorCodes.session_conflict, 409, "session has an unresolved turn");
+  }
+  sendJson(res, 200, await ctx.sessionStore.setThreadContext(workspace.dir, id, body.enabled));
 }

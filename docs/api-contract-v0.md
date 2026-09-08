@@ -385,7 +385,19 @@ scope 全部由服务端 session 状态派生：`workspaceId=workspaceInstanceId
 
 Workbench 只 spawn 钉定 `context@f63f57f`（或兼容后续 main）的公共 `context adapter ingest|distill`。子进程只从 env 取得 `CONTEXT_VAULT` / `CONTEXT_RUNTIME_TOKEN`；operator token、boot-token 与 Host 凭据不在 argv、不进入 renderer/preload/IPC/turn record/evidence。相同 occurrence replay 是幂等 no-op；部分成功后重启会重放导出并跳过 provider 已 `done` 的 occurrence。adapter failure 只把本地 export state 置 `failed`；下一次 workspace-open/restart 最多重试导出，不调用 `turnDriver`，不改变已持久的 Host 终态。
 
-`sourceLocator=context://occurrences/<occurrenceId>@1` 只是 source audit reference，不冒充 `context read` 所需的 item-unique `/artifacts/<artifactId>` locator。Workbench 不打开或共享 Context SQLite，也不做 recall/model injection/memory write。
+`sourceLocator=context://occurrences/<occurrenceId>@1` 只是 source audit reference，不冒充 `context read` 所需的 item-unique `/artifacts/<artifactId>` locator。此 exporter 不打开或共享 Context SQLite，也不做 recall/model injection/memory write。#214 的本地 Thread Context 独立读取既有可信回合记录，见下文。
+
+### 本地 Thread Context 与员工协作（#214 R1 / #143 R3 加法）
+
+`PATCH /sessions/:sessionId/context` 接受且仅接受 `{ "enabled": boolean }`，返回更新后的 `workbench-session.v1`。可选字段 `threadContextEnabled` 缺省为 `true`；运行中的会话拒绝修改策略。旧会话记录仍可读取，不增加第二套 session。
+
+执行前，服务端从当前 session 或当前群的可信已完成回合选择背景与可见答案，把 `thread-context.v1` 历史数据块放入既有密封 `turn-envelope.input`。不修改上游 envelope schema，不传递审批或权限字段。原始用户任务保留在 `turn-record.v1.input`，加法字段 `threadContext` 记录实际摘要、来源数、遗漏数、UTF-8 字节数、digest 和脱敏/截断标记。边界为最多 12 个来源、64 KiB context、单字段 8 KiB，context 与本次原始任务合计不超过 256 KiB。
+
+不同员工可并行执行；同一 workspace/position 的重叠执行返回 409 `session_conflict`。取消句柄按 workspace/position 和执行归属管理，旧执行结束不能删除新执行的取消句柄。个人 SSE 带岗位、回合和会话归属，供客户端隔离并行流。
+
+群 `POST /groups/:conversationRef/turns` 另接受可选 `mode: "parallel" | "relay"`，省略时为 `parallel`；`mentions` 是明确选择的接收人和接力顺序。群消息持久化 mode、engine 及预分配 spawns 后返回 202。并行模式同时启动各成员；接力模式只在前序可信完成后传递有界结果。后续未执行步骤用可读回的 `indeterminate` 记录及 `group_relay_blocked` 标明；不会伪造引擎事件。忙碌员工显示 `group_employee_busy`，切换 workspace 导致的未执行步骤显示 `group_workspace_changed`。重启后已接受但未启动的步骤恢复为 `group_dispatch_interrupted`，不自动重跑。
+
+本节取代下方早期 #52 的顺序派发行为；旧消息仍兼容。完整用户说明、数据边界及回滚注意事项见 [Thread Context 与协作](thread-context-and-collaboration.md)。
 
 ### 2.14 `POST /hire` — 创建员工（#33 加法，hire-request.v1alpha1 契约面）
 

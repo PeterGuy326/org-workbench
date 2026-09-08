@@ -8,10 +8,12 @@ import {
   errorCodes,
   isPositionId,
 } from "@roleweave/shared";
-import type { TurnEngine, TurnHistory, TurnRecord, WorkbenchSession } from "@roleweave/shared";
+import type { ThreadContextMetadata, TurnEngine, TurnHistory, TurnRecord, WorkbenchSession } from "@roleweave/shared";
 import type { EngineEvent, TurnTerminalReason } from "@roleweave/shared";
 import { assertSessionId, readAuthoritativeSessionIndex } from "../sessions/store.js";
 import { StableReadError, decodeStableUtf8, readStableBoundedFile } from "../stable-read.js";
+
+import { isThreadContextMetadata } from "./thread-context.js";
 
 const STATE_ROOT = path.join(".digital-employee", "workbench", "conversations");
 const SESSION_CONVERSATIONS_ROOT = path.join(
@@ -386,8 +388,9 @@ export function isTurnRecord(value: unknown): value is TurnRecord {
       "schemaVersion", "conversationId", "turnId", "positionId", "engine", "status",
       "input", "envelopeDigest", "createdAt", "updatedAt", "events",
     ],
-    ["runId", "output", "error", "groupRef", "conversationRef"],
+    ["runId", "output", "error", "groupRef", "conversationRef", "threadContext"],
   )) return false;
+  if (Object.hasOwn(value, "threadContext") && !isThreadContextMetadata(value.threadContext)) return false;
   const createdInstant = parseRfc3339Instant(value.createdAt);
   const updatedInstant = parseRfc3339Instant(value.updatedAt);
   if (
@@ -759,6 +762,7 @@ function isValidEventSequence(events: EngineEvent[]): boolean {
 export class TurnStore {
   private metadataLocks = new Map<string, Promise<ConversationMetadata>>();
   private activeTurns = new Set<string>();
+  private readonly recordLocks = new Map<string, Promise<void>>();
 
   constructor(
     private readonly options: {
@@ -773,6 +777,7 @@ export class TurnStore {
     engine: TurnEngine;
     message: string;
     envelopeDigest: string;
+    threadContext?: ThreadContextMetadata;
     now: string;
     /** Additive #52: local group conversationRef for group-spawned turns. */
     groupRef?: string;
@@ -793,6 +798,7 @@ export class TurnStore {
       status: "running",
       input: input.message,
       envelopeDigest: input.envelopeDigest,
+      ...(input.threadContext !== undefined ? { threadContext: input.threadContext } : {}),
       createdAt: input.now,
       updatedAt: input.now,
       events: [],
@@ -826,6 +832,7 @@ export class TurnStore {
     engine: TurnEngine;
     message: string;
     envelopeDigest: string;
+    threadContext?: ThreadContextMetadata;
     now: string;
     /** owb#63: contract-level back-link (= sessionId for session turns). */
     conversationRef?: string;
@@ -850,6 +857,7 @@ export class TurnStore {
       status: "running",
       input: input.message,
       envelopeDigest: input.envelopeDigest,
+      ...(input.threadContext !== undefined ? { threadContext: input.threadContext } : {}),
       createdAt: input.now,
       updatedAt: input.now,
       events: [],
@@ -896,10 +904,13 @@ export class TurnStore {
     let historyBytes = 0;
     const turns: TurnRecord[] = [];
     for (const name of names) {
+      // A completion can commit after the read opens its running snapshot.
+      // Such an in-process read is a stale view, never restart evidence.
+      const activeAtRead = new Set(this.activeTurns);
       let raw: unknown;
       try {
         const file = path.join(turnsDir, name);
-        const read = await readJson(file, MAX_TURN_RECORD_BYTES);
+        const read = await this.withRecordLock(file, () => readJson(file, MAX_TURN_RECORD_BYTES));
         historyBytes += read.bytes;
         if (historyBytes > MAX_HISTORY_BYTES) {
           throw storageError("local turn history exceeds the bounded total size");
@@ -918,6 +929,7 @@ export class TurnStore {
       }
       if (
         raw.status === "running" &&
+        !activeAtRead.has(this.activeTurnKey(workspace, raw.positionId, raw.turnId)) &&
         !this.activeTurns.has(this.activeTurnKey(workspace, raw.positionId, raw.turnId))
       ) {
         const recovered: TurnRecord = {
@@ -972,10 +984,13 @@ export class TurnStore {
     let historyBytes = 0;
     const turns: TurnRecord[] = [];
     for (const name of names) {
+      // A completion can commit after the read opens its running snapshot.
+      // Such an in-process read is a stale view, never restart evidence.
+      const activeAtRead = new Set(this.activeTurns);
       let raw: unknown;
       try {
         const file = path.join(turnsDir, name);
-        const read = await readJson(file, MAX_TURN_RECORD_BYTES);
+        const read = await this.withRecordLock(file, () => readJson(file, MAX_TURN_RECORD_BYTES));
         historyBytes += read.bytes;
         if (historyBytes > MAX_HISTORY_BYTES) {
           throw storageError("local session turn history exceeds the bounded total size");
@@ -994,6 +1009,7 @@ export class TurnStore {
       }
       if (
         raw.status === "running" &&
+        !activeAtRead.has(this.sessionActiveTurnKey(workspace, sessionId, raw.turnId)) &&
         !this.activeTurns.has(this.sessionActiveTurnKey(workspace, sessionId, raw.turnId))
       ) {
         const recovered: TurnRecord = {
@@ -1137,7 +1153,7 @@ export class TurnStore {
             throw storageError("local reports turn directory contains an unsafe record");
           }
           const file = path.join(turnsDir, turnEntry.name);
-          const recordRead = await readJson(file, MAX_TURN_RECORD_BYTES);
+          const recordRead = await this.withRecordLock(file, () => readJson(file, MAX_TURN_RECORD_BYTES));
           chargeStableBytes(recordRead.bytes);
           const raw = recordRead.value;
           if (
@@ -1296,16 +1312,33 @@ export class TurnStore {
     }
   }
 
+  /** Serialize this control plane's atomic replacements with stable reads.
+   * External pathname swaps still fail the unchanged no-follow/inode checks. */
+  private async withRecordLock<T>(file: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.recordLocks.get(file) ?? Promise.resolve();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const tail = previous.then(() => held);
+    this.recordLocks.set(file, tail);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.recordLocks.get(file) === tail) this.recordLocks.delete(file);
+    }
+  }
+
   private async writeTurn(workspace: string, record: TurnRecord): Promise<void> {
     const file = turnRecordFile(workspace, record.positionId, record.turnId);
     try {
-      await atomicWriteJson(
+      await this.withRecordLock(file, () => atomicWriteJson(
         file,
         record,
         MAX_TURN_RECORD_BYTES,
         this.options.atomicWriteOperations ?? nodeAtomicTurnWriteOperations,
         storageError,
-      );
+      ));
     } catch (error) {
       throw storageError("local turn record could not be persisted atomically", error);
     }
@@ -1318,13 +1351,13 @@ export class TurnStore {
   ): Promise<void> {
     const file = sessionTurnRecordFile(workspace, sessionId, record.turnId);
     try {
-      await atomicWriteJson(
+      await this.withRecordLock(file, () => atomicWriteJson(
         file,
         record,
         MAX_TURN_RECORD_BYTES,
         this.options.atomicWriteOperations ?? nodeAtomicTurnWriteOperations,
         storageError,
-      );
+      ));
     } catch (error) {
       throw storageError("local session turn record could not be persisted atomically", error);
     }

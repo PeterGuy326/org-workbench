@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("owb", {
   createSession: (request) => ipcRenderer.invoke("owb:session:create", request),
   sessions: (positionId) => ipcRenderer.invoke("owb:session:list", positionId),
   session: (sessionId) => ipcRenderer.invoke("owb:session:get", sessionId),
+  sessionSetContext: (request) => ipcRenderer.invoke("owb:session:context", request),
   rotateSession: (sessionId) => ipcRenderer.invoke("owb:session:rotate", sessionId),
   createSessionTurn: (request) => ipcRenderer.invoke("owb:session:turn:create", request),
   sessionTurnHistory: (sessionId) => ipcRenderer.invoke("owb:session:turn:history", sessionId),

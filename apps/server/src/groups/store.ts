@@ -22,6 +22,7 @@ import {
   OrgApiError,
   errorCodes,
   isPositionId,
+  turnEngines,
 } from "@roleweave/shared";
 import type {
   GroupConversation,
@@ -150,19 +151,49 @@ function isGroupConversation(value: unknown): value is GroupConversation {
 function isGroupMessage(value: unknown): value is GroupMessage {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  const required = ["schemaVersion", "messageId", "conversationRef", "input", "mentions", "createdAt"];
   return (
-    exactKeys(record, ["schemaVersion", "messageId", "conversationRef", "input", "mentions", "createdAt"]) &&
+    required.every((key) => Object.hasOwn(record, key)) &&
+    Object.keys(record).every((key) => [...required, "mode", "spawns", "engine"].includes(key)) &&
     record.schemaVersion === GROUP_MESSAGE_SCHEMA_VERSION &&
     typeof record.messageId === "string" &&
     typeof record.conversationRef === "string" &&
     typeof record.input === "string" &&
     Array.isArray(record.mentions) &&
     record.mentions.every((member) => isPositionId(member)) &&
+    (record.mode === undefined || record.mode === "parallel" || record.mode === "relay") &&
+    (record.engine === undefined || turnEngines.includes(record.engine as typeof turnEngines[number])) &&
+    (record.spawns === undefined || (
+      record.engine !== undefined &&
+      Array.isArray(record.spawns) && record.spawns.length === record.mentions.length &&
+      record.spawns.length <= MAX_GROUP_MEMBERS &&
+      record.spawns.every((spawn, index) => spawn !== null && typeof spawn === "object" &&
+        exactKeys(spawn, ["turnId", "positionId"]) &&
+        typeof spawn.turnId === "string" && spawn.turnId.length <= 128 && REF_PATTERN.test(spawn.turnId) &&
+        spawn.positionId === (record.mentions as string[])[index]) &&
+      new Set(record.spawns.map((spawn) => spawn.turnId)).size === record.spawns.length
+    )) &&
     typeof record.createdAt === "string"
   );
 }
 
 export class GroupStore {
+  private readonly activeDispatches = new Set<string>();
+
+  beginDispatch(workspace: string, conversationRef: string, messageId: string): () => void {
+    const key = this.dispatchKey(workspace, conversationRef, messageId);
+    this.activeDispatches.add(key);
+    return () => { this.activeDispatches.delete(key); };
+  }
+
+  hasActiveDispatch(workspace: string, conversationRef: string, messageId: string): boolean {
+    return this.activeDispatches.has(this.dispatchKey(workspace, conversationRef, messageId));
+  }
+
+  private dispatchKey(workspace: string, conversationRef: string, messageId: string): string {
+    return `${path.resolve(workspace)}\0${conversationRef}\0${messageId}`;
+  }
+
   async create(input: {
     workspace: string;
     sessionId: string;

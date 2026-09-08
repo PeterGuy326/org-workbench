@@ -21,6 +21,8 @@
 
 ### Changed
 
+- #214：同一会话的后续回合可携带有界、脱敏的可信历史，并展示实际注入摘要、数量、字节数和 digest；上下文开关按会话持久化。
+- #214：不同员工可同时处理任务；群聊支持显式并行和有序接力，前序失败时停止后续执行并保留可查询的状态。
 - Rewrote the README in English with customer onboarding, desktop downloads, AI integration guidance, and source development instructions.
 
 含 PR #3（feat(d1): 组织树只读）与 PR #7（fix(examples)）。

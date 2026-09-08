@@ -85,6 +85,7 @@ const SERVER_RUNTIME_FILES = [
   "dist/src/turns/envelope.js",
   "dist/src/turns/running.js",
   "dist/src/turns/store.js",
+  "dist/src/turns/thread-context.js",
   "dist/src/workspace-state.js",
 ];
 

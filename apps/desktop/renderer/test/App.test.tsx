@@ -74,6 +74,7 @@ function installBridge(overrides: Partial<OwbBridge> = {}): OwbBridge {
       body: { schemaVersion: "workbench-session-list.v1", positionId: "repo-owner", activeSessionId: activeSession.sessionId, sessions: [activeSession] },
     }),
     session: vi.fn().mockResolvedValue({ status: 200, body: activeSession }),
+    sessionSetContext: vi.fn().mockResolvedValue({ status: 200, body: activeSession }),
     rotateSession: vi.fn().mockResolvedValue({ status: 500, body: { code: "internal" } }),
     createSessionTurn: vi.fn().mockResolvedValue({ status: 500, body: { code: "internal", message: "unexpected" } }),
     sessionTurnHistory: vi.fn().mockResolvedValue({
@@ -656,20 +657,20 @@ describe("App runtime bridge", () => {
     expect(listener).not.toBeNull();
 
     act(() => {
-      listener!({ seq: 1, type: "turn.started", payload: { runId: "run-stream", timestamp: "2026-08-24T05:00:00.000Z", type: "run.started" } });
-      listener!({ seq: 2, type: "turn.model.delta", payload: { runId: "run-stream", timestamp: "2026-08-24T05:00:00.500Z", type: "model.delta", text: "正在分析" } });
-      listener!({ seq: 3, type: "turn.model.delta", payload: { runId: "run-stream", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text: "…核对完成" } });
+      listener!({ seq: 1, type: "turn.started", payload: { positionId: "repo-owner", sessionId: activeSession.sessionId, engine: "qoder", runId: "run-stream", timestamp: "2026-08-24T05:00:00.000Z", type: "run.started" } });
+      listener!({ seq: 2, type: "turn.model.delta", payload: { positionId: "repo-owner", sessionId: activeSession.sessionId, engine: "qoder", runId: "run-stream", timestamp: "2026-08-24T05:00:00.500Z", type: "model.delta", text: "正在分析" } });
+      listener!({ seq: 3, type: "turn.model.delta", payload: { positionId: "repo-owner", sessionId: activeSession.sessionId, engine: "qoder", runId: "run-stream", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text: "…核对完成" } });
     });
     expect(await screen.findByText("正在分析…核对完成")).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
 
     act(() => {
-      listener!({ seq: 3, type: "turn.model.delta", payload: { runId: "run-stream", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text: "…核对完成" } });
+      listener!({ seq: 3, type: "turn.model.delta", payload: { positionId: "repo-owner", sessionId: activeSession.sessionId, engine: "qoder", runId: "run-stream", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text: "…核对完成" } });
     });
     expect(screen.getAllByText("正在分析…核对完成")).toHaveLength(1);
 
     act(() => {
-      listener!({ seq: 4, type: "turn.completed", payload: { runId: "run-stream", timestamp: "2026-08-24T05:01:00.000Z", type: "run.completed", output: "发布门禁通过", terminalReason: "goal_met" } });
+      listener!({ seq: 4, type: "turn.completed", payload: { positionId: "repo-owner", sessionId: activeSession.sessionId, engine: "qoder", runId: "run-stream", timestamp: "2026-08-24T05:01:00.000Z", type: "run.completed", output: "发布门禁通过", terminalReason: "goal_met" } });
     });
     await act(async () => {
       resolveTurn({ status: 200, body: completed });
@@ -813,4 +814,148 @@ describe("App docs module wiring (#35 S3)", () => {
     expect(screen.getByText("版本 2026-08-27T00:00:00.000Z")).toBeInTheDocument();
     expect(positionDocFile).toHaveBeenCalledWith("repo-owner", "handbook.md");
   });
+});
+
+it("runs A/B/C independently and keeps late responses, streams and cancellation in their own sessions", async () => {
+  const ids = ["repo-owner", "docs-writer", "release-engineer"];
+  const employees = Object.fromEntries(ids.map((id, index) => [id, {
+    ...activeSession, positionId: id, sessionId: `${index + 1}1111111-1111-4111-8111-111111111111`,
+  }]));
+  const tree = { ...snapshot, positionCount: 3, tree: [{ ...snapshot.tree[0]!, children: ids.slice(1).map((id) => ({ id, reportTo: "repo-owner", budget: snapshot.tree[0]!.budget, children: [] })) }] };
+  const completed = new Map<string, TurnRecord[]>();
+  const finish = new Map<string, (value: unknown) => void>();
+  let listener: (value: unknown) => void = () => {};
+  const createSessionTurn = vi.fn(({ sessionId }: { sessionId: string }) => new Promise((resolve) => finish.set(sessionId, resolve)));
+  const cancelTurn = vi.fn().mockResolvedValue({ status: 200, body: {} });
+  const bridge = openedBridge({
+    orgTree: vi.fn().mockResolvedValue({ status: 200, body: tree }),
+    position: vi.fn(async (id: string) => ({ status: 200, body: { position: { ...position, id, name: id } } })),
+    sessions: vi.fn(async (id: string) => ({ status: 200, body: { schemaVersion: "workbench-session-list.v1", positionId: id, activeSessionId: employees[id]!.sessionId, sessions: [employees[id]!] } })),
+    sessionTurnHistory: vi.fn(async (sessionId: string) => ({ status: 200, body: history(completed.get(sessionId) ?? []) })),
+    createSessionTurn, cancelTurn,
+    onEvent: vi.fn((callback) => { listener = callback; return () => {}; }),
+  });
+  render(<App />);
+  const choose = async (id: string) => {
+    const treeElement = await screen.findByRole("tree");
+    fireEvent.click(treeElement.querySelector(`[data-org-node-id="${id}"]`)!);
+    await waitFor(() => expect(bridge.sessions).toHaveBeenCalledWith(id));
+  };
+  for (const [index, id] of ids.entries()) {
+    await choose(id);
+    await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("下达任务"), { target: { value: `task-${id}` } });
+    fireEvent.click(screen.getByRole("button", { name: "发送任务" }));
+    await waitFor(() => expect(createSessionTurn).toHaveBeenCalledTimes(index + 1));
+  }
+  act(() => ids.forEach((id, index) => listener({ seq: index + 1, type: "turn.model.delta", payload: {
+    positionId: id, sessionId: employees[id]!.sessionId, engine: "qoder", runId: `run-${id}`, text: `live-${id}`,
+  } })));
+  expect(await screen.findByText("live-release-engineer")).toBeInTheDocument();
+  expect(screen.queryByText("live-repo-owner")).not.toBeInTheDocument();
+  const resultA = apiTurn({ turnId: "A", runId: "run-repo-owner", input: "task-repo-owner", output: "A final result" });
+  completed.set(employees[ids[0]!]!.sessionId, [resultA]);
+  await act(async () => finish.get(employees[ids[0]!]!.sessionId)!({ status: 200, body: resultA }));
+  expect(screen.queryByText("A final result")).not.toBeInTheDocument();
+  expect(screen.getByText("live-release-engineer")).toBeInTheDocument();
+  await choose("docs-writer");
+  expect(await screen.findByText("live-docs-writer")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "中断回合" }));
+  await waitFor(() => expect(cancelTurn).toHaveBeenCalledWith("docs-writer"));
+  await act(async () => finish.get(employees["docs-writer"]!.sessionId)!({ status: 500, body: { message: "B failed" } }));
+  await choose("repo-owner");
+  expect(await screen.findByText("A final result")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+  await choose("release-engineer");
+  expect(await screen.findByText("live-release-engineer")).toBeInTheDocument();
+  expect(screen.queryByText("B failed")).not.toBeInTheDocument();
+  await act(async () => finish.get(employees["release-engineer"]!.sessionId)!({ status: 500, body: { message: "C failed" } }));
+});
+
+it("keeps B usable during A's delayed session creation and context toggle, then restores A", async () => {
+  const employeeB = { ...activeSession, positionId: "docs-writer", sessionId: "22222222-2222-4222-8222-222222222222" };
+  const tree = { ...snapshot, positionCount: 2, tree: [{ ...snapshot.tree[0]!, children: [{ id: "docs-writer", reportTo: "repo-owner", budget: snapshot.tree[0]!.budget, children: [] }] }] };
+  let created = false;
+  let contextEnabled = true;
+  let resolveCreate: (value: unknown) => void = () => {};
+  let resolveContext: (value: unknown) => void = () => {};
+  const bridge = openedBridge({
+    orgTree: vi.fn().mockResolvedValue({ status: 200, body: tree }),
+    position: vi.fn(async (id: string) => ({ status: 200, body: { position: { ...position, id, name: id } } })),
+    sessions: vi.fn(async (id: string) => ({ status: 200, body: { schemaVersion: "workbench-session-list.v1", positionId: id,
+      activeSessionId: id === "docs-writer" ? employeeB.sessionId : created ? activeSession.sessionId : null,
+      sessions: id === "docs-writer" ? [employeeB] : created ? [{ ...activeSession, threadContextEnabled: contextEnabled }] : [] } })),
+    createSession: vi.fn(() => new Promise((resolve) => { resolveCreate = resolve; })),
+    sessionSetContext: vi.fn(() => new Promise((resolve) => { resolveContext = resolve; })),
+  });
+  render(<App />);
+  const choose = async (id: string) => {
+    fireEvent.click((await screen.findByRole("tree")).querySelector(`[data-org-node-id="${id}"]`)!);
+  };
+  await choose("repo-owner");
+  await waitFor(() => expect(bridge.createSession).toHaveBeenCalled());
+  await choose("docs-writer");
+  await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+  fireEvent.change(screen.getByLabelText("下达任务"), { target: { value: "B stays intact" } });
+  created = true;
+  await act(async () => resolveCreate({ status: 201, body: activeSession }));
+  expect(screen.getByLabelText("下达任务")).toHaveValue("B stays intact");
+  expect(screen.getByLabelText("下达任务")).toBeEnabled();
+  await choose("repo-owner");
+  await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+  fireEvent.click(screen.getByRole("switch", { name: "启用会话上下文" }));
+  await waitFor(() => expect(bridge.sessionSetContext).toHaveBeenCalledWith({ sessionId: activeSession.sessionId, enabled: false }));
+  await choose("docs-writer");
+  await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+  contextEnabled = false;
+  await act(async () => resolveContext({ status: 200, body: { ...activeSession, threadContextEnabled: false } }));
+  expect(screen.getByRole("switch", { name: "启用会话上下文" })).toBeChecked();
+  await choose("repo-owner");
+  await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+  expect(screen.getByRole("switch", { name: "启用会话上下文" })).not.toBeChecked();
+});
+
+it("drops workspace A's late group 202 after switching to B and reloads A on return", async () => {
+  let workspace = "A";
+  let resolveOldDispatch: (value: unknown) => void = () => {};
+  let aCompleted = false;
+  const groupA = { schemaVersion: "conversation-group.v1" as const, conversationRef: "workspace-a-group", sessionId: "group-session-a", members: ["repo-owner"], createdAt: activeSession.createdAt, updatedAt: activeSession.createdAt };
+  const groupB = { ...groupA, conversationRef: "workspace-b-group", sessionId: "group-session-b" };
+  const bridge = openedBridge({
+    workspace: vi.fn(async () => ({ status: 200, body: { open: true, path: `/workspace/${workspace}`, business: `Workspace ${workspace}` } })),
+    groups: vi.fn(async () => ({ status: 200, body: { schemaVersion: "conversation-group-list.v1", groups: [workspace === "A" ? groupA : groupB] } })),
+    groupTimeline: vi.fn(async (ref: string) => ({ status: 200, body: { schemaVersion: "group-timeline.v1", conversationRef: ref, items:
+      ref === groupA.conversationRef && aCompleted ? [{ kind: "member", turn: apiTurn({ conversationRef: ref, groupRef: ref, output: "A restored from disk" }) }] : [] } })),
+    createGroupTurn: vi.fn(() => new Promise((resolve) => { resolveOldDispatch = resolve; })),
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "群聊" }));
+  await screen.findByLabelText("群聊消息");
+  pickSelectOption("选择要 @ 的成员", "代码库负责人");
+  fireEvent.change(screen.getByLabelText("群聊消息"), { target: { value: "A pending task" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送群消息" }));
+  await waitFor(() => expect(bridge.createGroupTurn).toHaveBeenCalledTimes(1));
+  const switchWorkspace = async (next: string) => {
+    workspace = next;
+    fireEvent.click(screen.getByRole("button", { name: "项目入口" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /打开项目/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "项目入口" })).toHaveTextContent(`Workspace ${next}`));
+  };
+  await switchWorkspace("B");
+  await waitFor(() => expect(bridge.groupTimeline).toHaveBeenCalledWith(groupB.conversationRef));
+  expect(screen.getByLabelText("群聊消息")).toHaveValue("");
+  expect(screen.getByLabelText("群聊消息")).toBeEnabled();
+  expect(screen.getByRole("button", { name: "发送群消息" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("群聊消息"), { target: { value: "B clean draft" } });
+  await act(async () => resolveOldDispatch({ status: 202, body: { conversationRef: groupA.conversationRef, messageId: "old-A", spawns: [{ turnId: "old-A-turn", positionId: "repo-owner" }] } }));
+  expect(screen.getByLabelText("群聊消息")).toHaveValue("B clean draft");
+  expect(screen.queryByText("A pending task")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "组织" }));
+  await selectRepoOwner();
+  await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "群聊" }));
+  aCompleted = true;
+  await switchWorkspace("A");
+  expect(await screen.findByText("A restored from disk")).toBeInTheDocument();
+  expect(screen.getByLabelText("群聊消息")).toHaveValue("");
 });

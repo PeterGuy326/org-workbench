@@ -28,7 +28,7 @@ describe("turn stream reducer", () => {
     state = applyTurnEvent(state, delta(2, "run-1", "正在分析"));
     state = applyTurnEvent(state, delta(3, "run-1", "…已核对"));
 
-    expect(state.pending?.runId).toBe("run-1");
+    expect(state.pending["repo-owner"]?.runId).toBe("run-1");
     expect(state.runs["run-1"]?.text).toBe("正在分析…已核对");
     expect(state.runs["run-1"]?.positionId).toBe("repo-owner");
     expect(state.runs["run-1"]?.input).toBe("检查发布");
@@ -40,7 +40,7 @@ describe("turn stream reducer", () => {
     state = applyTurnEvent(state, started(2, "run-1"));
 
     expect(state.runs["run-1"]?.text).toBe("早到文本");
-    expect(state.pending?.runId).toBe("run-1");
+    expect(state.pending["repo-owner"]?.runId).toBe("run-1");
   });
 
   it("never attributes a run when no POST is pending", () => {
@@ -102,7 +102,7 @@ describe("turn stream reducer", () => {
     let state = beginPendingTurn(EMPTY_TURN_STREAM, pending);
     state = applyTurnEvent(state, started(1, "run-1"));
     const byRunId = settlePendingTurn(state, { runId: "run-1", positionId: "repo-owner" });
-    expect(byRunId.pending).toBeNull();
+    expect(byRunId.pending).toEqual({});
     expect(byRunId.runs).toEqual({});
 
     const missed = beginPendingTurn(EMPTY_TURN_STREAM, pending);
@@ -126,7 +126,7 @@ describe("turn stream reducer", () => {
     expect(settled.settledGroupRuns["turn-settled"]?.turnId).toBe("turn-settled");
 
     const reset = clearPersonalTurnState(state);
-    expect(reset.pending).toBeNull();
+    expect(reset.pending).toEqual({});
     expect(reset.runs["run-personal"]).toBeUndefined();
     expect(reset.runs["turn-owner"]?.turnId).toBe("turn-owner");
     expect(reset.settledGroupRuns["turn-settled"]?.turnId).toBe("turn-settled");
@@ -134,7 +134,7 @@ describe("turn stream reducer", () => {
 
   it("cancel clears only the pending marker", () => {
     const state = beginPendingTurn(EMPTY_TURN_STREAM, pending);
-    expect(cancelPendingTurn(state).pending).toBeNull();
+    expect(cancelPendingTurn(state, "repo-owner").pending).toEqual({});
   });
 
   it("records turn.usage totals on the attributed live run", () => {
@@ -463,7 +463,7 @@ describe("personal dialog baseline regression (#51)", () => {
     expect(state.runs["g-run-1"]?.text).toBe("群成员增量");
     expect(state.runs["g-run-1"]?.groupRef).toBe("conv-1");
     expect(state.runs["g-turn-1"]).toBeUndefined();
-    expect(state.pending?.runId).toBe("run-1");
+    expect(state.pending["repo-owner"]?.runId).toBe("run-1");
   });
 
   it("removes only the group run on a group-scoped turn.indeterminate", () => {
@@ -492,7 +492,7 @@ describe("personal dialog baseline regression (#51)", () => {
     });
     expect(state.runs["g-turn-1"]).toBeUndefined();
     expect(state.runs["run-1"]?.positionId).toBe("repo-owner");
-    expect(state.pending?.runId).toBe("run-1");
+    expect(state.pending["repo-owner"]?.runId).toBe("run-1");
   });
 });
 
@@ -564,6 +564,31 @@ describe("conversationRef back-link grouping (#63)", () => {
     );
     expect(state.runs["run-1"]?.text).toBe("会话增量");
     expect(state.runs["run-1"]?.groupRef).toBeUndefined();
-    expect(state.pending?.runId).toBe("run-1");
+    expect(state.pending["repo-owner"]?.runId).toBe("run-1");
   });
+});
+
+it("attributes interleaved personal runs to A/B/C and ignores unknown or wrong-session traffic", () => {
+  let state = EMPTY_TURN_STREAM;
+  for (const positionId of ["A", "B", "C"]) state = beginPendingTurn(state, { positionId, sessionId: `session-${positionId}`, engine: "qoder", input: `task-${positionId}` });
+  let seq = 0;
+  const emit = (positionId: string, sessionId: string, text: string) => {
+    state = applyTurnEvent(state, { seq: ++seq, type: "turn.model.delta", payload: { positionId, sessionId, engine: "qoder", runId: `run-${positionId}`, text } });
+  };
+  emit("B", "wrong-session", "wrong");
+  state = applyTurnEvent(state, delta(++seq, "unattributed", "unknown"));
+  expect(state.runs).toEqual({});
+  for (const positionId of ["C", "A", "B"]) emit(positionId, `session-${positionId}`, `live-${positionId}`);
+  emit("B", "wrong-session", "late unrelated text");
+  expect(Object.values(state.runs).map((run) => run.text)).toEqual(["live-C", "live-A", "live-B"]);
+  const unrelatedOutcome = settlePendingTurn(state, { positionId: "B", sessionId: "old-B", runId: null });
+  expect(unrelatedOutcome.pending["B"]?.sessionId).toBe("session-B");
+  expect(unrelatedOutcome.runs["run-B"]?.text).toBe("live-B");
+  state = settlePendingTurn(state, { positionId: "A", sessionId: "session-A", runId: "run-A" });
+  expect(Object.keys(state.pending)).toEqual(["B", "C"]);
+  expect(Object.keys(state.runs)).toEqual(["run-C", "run-B"]);
+  emit("A", "session-A", "late");
+  expect(state.runs["run-A"]).toBeUndefined();
+  state = applyTurnEvent(state, { seq: ++seq, type: "turn.indeterminate", payload: { positionId: "B", sessionId: "session-B" } });
+  expect(Object.keys(state.runs)).toEqual(["run-C"]);
 });
