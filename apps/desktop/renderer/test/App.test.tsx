@@ -974,27 +974,45 @@ it("restores the original workspace's running task and cancels its exact owner a
   let workspace = "A";
   let listener: (value: unknown) => void = () => {};
   const finish = new Map<string, (value: unknown) => void>();
+  const sessionLoads: Array<[string, string]> = [];
+  const sessions = vi.fn(async (positionId: string) => {
+    sessionLoads.push([workspace, positionId]);
+    return { status: 200, body: { schemaVersion: "workbench-session-list.v1", positionId, activeSessionId: activeSession.sessionId, sessions: [activeSession] } };
+  });
   const cancelTurn = vi.fn().mockResolvedValue({ status: 200, body: { cancelled: true, positionId: "repo-owner" } });
-  const bridge = openedBridge({
+  openedBridge({
     workspace: vi.fn(async () => ({ status: 200, body: { open: true, path: `/workspace/${workspace}`, business: `Workspace ${workspace}` } })),
+    sessions,
     createSessionTurn: vi.fn(() => new Promise((resolve) => finish.set(workspace, resolve))),
     cancelTurn,
     onEvent: vi.fn((callback) => { listener = callback; return () => {}; }),
   });
-  render(<App />);
-  await selectRepoOwner();
+  // Every navigation/read fixture resolves immediately. Flush that microtask
+  // chain explicitly instead of repeatedly polling the full animated App DOM.
+  await act(async () => { render(<App />); });
+  const projectEntry = screen.getByRole("button", { name: "项目入口" });
+  const row = screen.getByRole("tree").querySelector('[data-org-node-id="repo-owner"]');
+  expect(row).not.toBeNull();
+  await act(async () => { fireEvent.click(row!); });
+  expect(screen.getByRole("heading", { name: "本地对话" })).toBeInTheDocument();
   const send = async (input: string) => {
-    await waitFor(() => expect(screen.getByLabelText("下达任务")).toBeEnabled());
-    fireEvent.change(screen.getByLabelText("下达任务"), { target: { value: input } });
-    fireEvent.click(screen.getByRole("button", { name: "发送任务" }));
-    await waitFor(() => expect(finish.has(workspace)).toBe(true));
+    const composer = screen.getByLabelText("下达任务");
+    expect(composer).toBeEnabled();
+    fireEvent.change(composer, { target: { value: input } });
+    const sendButton = within(composer.closest("form")!).getByRole("button", { name: "发送任务" });
+    await act(async () => { fireEvent.click(sendButton); });
+    expect(finish.has(workspace)).toBe(true);
   };
   const navigate = async (next: string) => {
+    const previousLoads = sessionLoads.length;
     workspace = next;
-    fireEvent.click(screen.getByRole("button", { name: "项目入口" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /打开项目/ }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "项目入口" })).toHaveTextContent(`Workspace ${next}`));
-    await waitFor(() => expect(bridge.sessions).toHaveBeenCalledWith("repo-owner"));
+    fireEvent.click(projectEntry);
+    const menu = screen.getByRole("menu", { name: "项目入口" });
+    const openItem = within(menu).getByRole("menuitem", { name: /打开项目/ });
+    await act(async () => { fireEvent.click(openItem); });
+    expect(projectEntry).toHaveTextContent(`Workspace ${next}`);
+    expect(sessionLoads.length).toBeGreaterThan(previousLoads);
+    expect(sessionLoads.at(-1)).toEqual([next, "repo-owner"]);
   };
   await send("A background task");
   const event = (seq: number, owner: string, text: string) => ({ seq, type: "turn.model.delta", payload: {
@@ -1002,20 +1020,23 @@ it("restores the original workspace's running task and cancels its exact owner a
     engine: "qoder", runId: "same-engine-run-id", turnId: owner === "A" ? "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" : "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text,
   } });
   act(() => listener(event(1, "A", "A live output")));
-  expect(await screen.findByText("A live output")).toBeInTheDocument();
+  expect(screen.getByText("A live output")).toBeInTheDocument();
   await navigate("B");
   await send("B independent task");
-  act(() => listener(event(2, "B", "B live output")));
-  act(() => listener(event(3, "A", " continues")));
-  expect(await screen.findByText("B live output")).toBeInTheDocument();
+  act(() => {
+    listener(event(2, "B", "B live output"));
+    listener(event(3, "A", " continues"));
+  });
+  expect(screen.getByText("B live output")).toBeInTheDocument();
   expect(screen.queryByText(/A live output/)).not.toBeInTheDocument();
   await navigate("A");
-  expect(await screen.findByText("A live output continues")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "中断回合" }));
-  await waitFor(() => expect(cancelTurn).toHaveBeenCalledWith({ positionId: "repo-owner", workspacePath: "/workspace/A", turnId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
+  expect(screen.getByText("A live output continues")).toBeInTheDocument();
+  const cancelButton = screen.getByRole("button", { name: "中断回合" });
+  await act(async () => { fireEvent.click(cancelButton); });
+  expect(cancelTurn).toHaveBeenCalledWith({ positionId: "repo-owner", workspacePath: "/workspace/A", turnId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
   await act(async () => finish.get("A")!({ status: 500, body: { message: "A cancelled" } }));
   await navigate("B");
-  expect(await screen.findByText("B live output")).toBeInTheDocument();
+  expect(screen.getByText("B live output")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "中断回合" })).toBeEnabled();
   await act(async () => finish.get("B")!({ status: 500, body: { message: "B completed" } }));
 });
