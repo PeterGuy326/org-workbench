@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld("owb", {
   assetsRead: (assetId) => ipcRenderer.invoke("owb:assets:read", assetId),
   assetsCreate: (request) => ipcRenderer.invoke("owb:assets:create", request),
   createTurn: (request) => ipcRenderer.invoke("owb:turn:create", request),
-  cancelTurn: (positionId) => ipcRenderer.invoke("owb:turn:cancel", { positionId }),
+  cancelTurn: (request) => ipcRenderer.invoke("owb:turn:cancel", typeof request === "string" ? { positionId: request } : request),
   turnHistory: (positionId) => ipcRenderer.invoke("owb:turn:history", positionId),
   createSession: (request) => ipcRenderer.invoke("owb:session:create", request),
   sessions: (positionId) => ipcRenderer.invoke("owb:session:list", positionId),

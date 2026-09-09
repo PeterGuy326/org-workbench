@@ -131,6 +131,12 @@ function AppInner({
   const [turns, setTurns] = useState<TurnRecord[]>([]);
   const [turnStream, setTurnStream] = useState<TurnStreamState>(EMPTY_TURN_STREAM);
   const [busyPositions, setBusyPositions] = useState<Record<string, boolean>>({});
+  // Keep execution ownership across navigation: the service does not stop a
+  // task when the operator opens another workspace.
+  const workspaceStreams = useRef(new Map<string, TurnStreamState>());
+  const workspaceBusy = useRef(new Map<string, Record<string, boolean>>());
+  const workspaceCancelling = useRef(new Map<string, Record<string, boolean>>());
+  const cancelOperations = useRef(new Map<string, symbol>());
   const inFlightPositions = useRef(new Set<string>());
   const [cancellingPositions, setCancellingPositions] = useState<Record<string, boolean>>({});
   const turnBusy = selectedId !== null && busyPositions[selectedId] === true;
@@ -139,7 +145,6 @@ function AppInner({
   const selectionVersion = useRef(0);
   const historyRequest = useRef(0);
   const sessionOperations = useRef(new Map<string, symbol>());
-  const workspaceGeneration = useRef(0);
   const workspacePathRef = useRef(workspaceInfo?.path);
   const [turnError, setTurnError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
@@ -173,19 +178,35 @@ function AppInner({
   /** #146：界面文案唯一入口；数据层文案不经过这里。 */
   const t = useT();
 
+  const updateWorkspaceStream = useCallback((path: string, update: (state: TurnStreamState) => TurnStreamState) => {
+    const next = update(workspaceStreams.current.get(path) ?? EMPTY_TURN_STREAM);
+    workspaceStreams.current.set(path, next);
+    if (workspacePathRef.current === path) setTurnStream(next);
+  }, []);
+
+  const updateWorkspaceBusy = useCallback((path: string, positionId: string, busy: boolean) => {
+    const next = { ...workspaceBusy.current.get(path), [positionId]: busy };
+    workspaceBusy.current.set(path, next);
+    if (workspacePathRef.current === path) setBusyPositions(next);
+  }, []);
+
+  const updateWorkspaceCancelling = useCallback((path: string, positionId: string, cancelling: boolean) => {
+    const next = { ...workspaceCancelling.current.get(path), [positionId]: cancelling };
+    workspaceCancelling.current.set(path, next);
+    if (workspacePathRef.current === path) setCancellingPositions(next);
+  }, []);
+
   useEffect(() => {
     if (workspacePathRef.current === workspaceInfo?.path) return;
     workspacePathRef.current = workspaceInfo?.path;
-    workspaceGeneration.current += 1;
     selectionVersion.current += 1;
     historyRequest.current += 1;
     selectedSessions.current = {};
     sessionOperations.current.clear();
-    inFlightPositions.current.clear();
-    setBusyPositions({});
-    setCancellingPositions({});
+    setBusyPositions(workspaceBusy.current.get(workspaceInfo?.path ?? "") ?? {});
+    setCancellingPositions(workspaceCancelling.current.get(workspaceInfo?.path ?? "") ?? {});
     setSessionBusyPositions({});
-    setTurnStream(EMPTY_TURN_STREAM);
+    setTurnStream(workspaceStreams.current.get(workspaceInfo?.path ?? "") ?? EMPTY_TURN_STREAM);
     setTurns([]);
     setSessions([]);
     selectedSessionIdRef.current = null;
@@ -330,7 +351,7 @@ function AppInner({
       setTurnError(null);
       return true;
     } catch {
-      if (selectedIdRef.current === id && selectedSessionIdRef.current === sessionId) {
+      if (requestVersion === historyRequest.current && selectedIdRef.current === id && selectedSessionIdRef.current === sessionId) {
         setTurnError(t("turn.historyFailOffline"));
       }
       return false;
@@ -361,7 +382,7 @@ function AppInner({
       setTurnError(null);
       return true;
     } catch {
-      if (selectedIdRef.current === id) setTurnError(t("turn.sessionsFailOffline"));
+      if (version === selectionVersion.current && selectedIdRef.current === id) setTurnError(t("turn.sessionsFailOffline"));
       return false;
     }
   }, [t]);
@@ -426,7 +447,12 @@ function AppInner({
         return;
       }
       if (typeof envelope?.type === "string" && envelope.type.startsWith("turn.")) {
-        setTurnStream((current) => applyTurnEvent(current, envelope as TurnStreamEnvelope));
+        const payload = (event as { payload?: { workspacePath?: unknown } }).payload;
+        // Legacy unscoped events are safe only while a single owner is known.
+        // The current server always attributes events to the original owner.
+        const owner = typeof payload?.workspacePath === "string" ? payload.workspacePath :
+          workspaceStreams.current.size <= 1 ? workspacePathRef.current : undefined;
+        if (owner !== undefined) updateWorkspaceStream(owner, (current) => applyTurnEvent(current, envelope as TurnStreamEnvelope));
       }
       if (["turn.completed", "turn.failed", "turn.indeterminate"].includes(envelope?.type ?? "")) {
         void loadReports();
@@ -444,7 +470,9 @@ function AppInner({
       setSseState(state);
       // A reconnect restarts the server-side seq space; drop the replay guard
       // so new events are not suppressed by a stale high-water mark.
-      if (state === "connecting") setTurnStream((current) => resetStreamSeq(current));
+      if (state === "connecting") {
+        for (const path of workspaceStreams.current.keys()) updateWorkspaceStream(path, resetStreamSeq);
+      }
     };
     const offSse = window.owb.onSseStatus(applySseStatus);
     void window.owb.sseStatus().then(applySseStatus);
@@ -457,7 +485,7 @@ function AppInner({
       offSse();
       offFallback();
     };
-  }, [loadReports, loadTurnHistory, refresh]);
+  }, [loadReports, loadTurnHistory, refresh, updateWorkspaceStream]);
 
   const selectPosition = useCallback((id: string) => {
     if (selectedIdRef.current === id) return;
@@ -547,13 +575,15 @@ function AppInner({
       setTurnError(t("turn.needSession"));
       return false;
     }
-    if (selectedIdRef.current !== request.positionId || inFlightPositions.current.has(request.positionId)) return false;
-    inFlightPositions.current.add(request.positionId);
-    setBusyPositions((current) => ({ ...current, [request.positionId]: true }));
-    const workspaceVersion = workspaceGeneration.current;
-    const isSelected = () => workspaceVersion === workspaceGeneration.current && selectedIdRef.current === request.positionId && selectedSessionIdRef.current === sessionId;
+    const workspacePath = workspacePathRef.current;
+    if (workspacePath === undefined) return false;
+    const requestKey = JSON.stringify([workspacePath, request.positionId]);
+    if (selectedIdRef.current !== request.positionId || inFlightPositions.current.has(requestKey)) return false;
+    inFlightPositions.current.add(requestKey);
+    updateWorkspaceBusy(workspacePath, request.positionId, true);
+    const isSelected = () => workspacePathRef.current === workspacePath && selectedIdRef.current === request.positionId && selectedSessionIdRef.current === sessionId;
     setTurnError(null);
-    setTurnStream((current) =>
+    updateWorkspaceStream(workspacePath, (current) =>
       beginPendingTurn(current, {
         positionId: request.positionId,
         sessionId,
@@ -570,11 +600,10 @@ function AppInner({
           ? { pendingApproval: request.pendingApproval }
           : {}),
       });
-      if (workspaceVersion !== workspaceGeneration.current) return false;
       if (res.status !== 200) {
         const message = apiErrorMessage(res.body, t("turn.createFail"));
         if (isSelected()) setTurnError(message);
-        setTurnStream((current) => settlePendingTurn(current, { positionId: request.positionId, sessionId, runId: null }));
+        updateWorkspaceStream(workspacePath, (current) => settlePendingTurn(current, { positionId: request.positionId, sessionId, runId: null }));
         return false;
       }
       if (isSelected()) {
@@ -586,28 +615,26 @@ function AppInner({
         );
         setTurns((current) => replaceTurn(current, returned));
       }
-      const body = res.body as { runId?: unknown };
-      setTurnStream((current) =>
+      const body = res.body as { runId?: unknown; turnId?: unknown };
+      updateWorkspaceStream(workspacePath, (current) =>
         settlePendingTurn(current, {
           runId: typeof body.runId === "string" ? body.runId : null,
+          ...(typeof body.turnId === "string" ? { turnId: body.turnId } : {}),
           positionId: request.positionId,
           sessionId,
         }),
       );
-      await loadTurnHistory(request.positionId, sessionId);
+      if (isSelected()) await loadTurnHistory(request.positionId, sessionId);
       return true;
     } catch {
-      if (workspaceVersion !== workspaceGeneration.current) return false;
-      setTurnStream((current) => settlePendingTurn(current, { positionId: request.positionId, sessionId, runId: null }));
+      updateWorkspaceStream(workspacePath, (current) => settlePendingTurn(current, { positionId: request.positionId, sessionId, runId: null }));
       if (isSelected()) setTurnError(t("turn.createFailOffline"));
       return false;
     } finally {
-      if (workspaceVersion === workspaceGeneration.current) {
-        inFlightPositions.current.delete(request.positionId);
-        setBusyPositions((current) => ({ ...current, [request.positionId]: false }));
-      }
+      inFlightPositions.current.delete(requestKey);
+      updateWorkspaceBusy(workspacePath, request.positionId, false);
     }
-  }, [loadTurnHistory, t]);
+  }, [loadTurnHistory, t, updateWorkspaceBusy, updateWorkspaceStream]);
 
   const setSessionContext = useCallback(async (sessionId: string, enabled: boolean) => {
     const positionId = selectedIdRef.current;
@@ -640,7 +667,9 @@ function AppInner({
       engine: TurnEngine,
     ) => {
       if (latestGroupWorkspaceScope.current !== groupWorkspaceScope) return;
-      setTurnStream((current) => latestGroupWorkspaceScope.current !== groupWorkspaceScope ? current :
+      const path = workspacePathRef.current;
+      if (path === undefined) return;
+      updateWorkspaceStream(path, (current) => latestGroupWorkspaceScope.current !== groupWorkspaceScope ? current :
         spawns.reduce(
           (state, spawn) =>
             beginGroupRun(state, {
@@ -655,31 +684,43 @@ function AppInner({
         ),
       );
     },
-    [groupWorkspaceScope],
+    [groupWorkspaceScope, updateWorkspaceStream],
   );
 
   const reconcileGroup = useCallback((timeline: GroupTimeline) => {
     if (latestGroupWorkspaceScope.current !== groupWorkspaceScope) return;
-    setTurnStream((current) => latestGroupWorkspaceScope.current === groupWorkspaceScope ? reconcileGroupTimeline(current, timeline) : current);
-  }, [groupWorkspaceScope]);
+    const path = workspacePathRef.current;
+    if (path !== undefined) updateWorkspaceStream(path, (current) => latestGroupWorkspaceScope.current === groupWorkspaceScope ? reconcileGroupTimeline(current, timeline) : current);
+  }, [groupWorkspaceScope, updateWorkspaceStream]);
 
   /** Operator cancel (issue #25 Slice A): the control plane settles the turn
    * as indeterminate/turn_cancelled; the in-flight POST readback and the
    * history reload remain the only authorities for the final record. */
   const cancelTurn = useCallback(async (positionId: string) => {
-    setCancellingPositions((current) => ({ ...current, [positionId]: true }));
+    const workspacePath = workspacePathRef.current;
+    if (workspacePath === undefined) return;
+    const stream = workspaceStreams.current.get(workspacePath);
+    const pending = stream?.pending[positionId];
+    const running = Object.values(stream?.runs ?? {}).find((run) => run.positionId === positionId && run.sessionId === selectedSessionIdRef.current && run.groupRef === undefined);
+    const turnId = pending?.turnId ?? running?.turnId;
+    const key = JSON.stringify([workspacePath, positionId]);
+    const operation = Symbol();
+    cancelOperations.current.set(key, operation);
+    updateWorkspaceCancelling(workspacePath, positionId, true);
+    const isSelected = () => workspacePathRef.current === workspacePath && selectedIdRef.current === positionId;
     setTurnError(null);
     try {
-      const res = await window.owb.cancelTurn(positionId);
-      if (res.status !== 200) {
-        if (selectedIdRef.current === positionId) setTurnError(apiErrorMessage(res.body, t("turn.cancelRejected")));
-      }
+      const res = await window.owb.cancelTurn({ positionId, workspacePath, ...(turnId ? { turnId } : {}) });
+      if (res.status !== 200 && isSelected()) setTurnError(apiErrorMessage(res.body, t("turn.cancelRejected")));
     } catch {
-      if (selectedIdRef.current === positionId) setTurnError(t("turn.cancelFailOffline"));
+      if (isSelected()) setTurnError(t("turn.cancelFailOffline"));
     } finally {
-      setCancellingPositions((current) => ({ ...current, [positionId]: false }));
+      if (cancelOperations.current.get(key) === operation) {
+        cancelOperations.current.delete(key);
+        updateWorkspaceCancelling(workspacePath, positionId, false);
+      }
     }
-  }, [t]);
+  }, [t, updateWorkspaceCancelling]);
 
   /** Operator verdict (issue #25 Slice B): the verdict is a new resume turn
    * whose sealed envelope carries pendingApproval; granted defaults scope to
@@ -923,7 +964,7 @@ function AppInner({
     const live: TurnRecord[] = selectedId === null
       ? []
       : Object.entries(turnStream.runs)
-          .filter(([runId, run]) => run.groupRef === undefined && run.positionId === selectedId && run.sessionId === selectedSessionId && !historyRunIds.has(runId))
+          .filter(([runId, run]) => run.groupRef === undefined && run.positionId === selectedId && run.sessionId === selectedSessionId && !historyRunIds.has(run.engineRunId ?? runId))
           .map(([runId, run]) => ({
             id: `live-${runId}`,
             provisional: true,
@@ -1111,6 +1152,7 @@ function AppInner({
           )}
           {workspaceInfo?.open === true ? (
             <HireDrawer
+              workspacePath={workspaceInfo.path}
               open={treeHireParent !== undefined}
               positions={positions}
               presetReportTo={treeHireParent ?? null}

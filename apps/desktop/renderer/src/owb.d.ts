@@ -20,6 +20,7 @@ import type {
   GroupTimeline,
   HealthResponse,
   ChangeManifest,
+  CancelTurnRequest,
   HirePositionRequest,
   HireResult,
   OrgBackupsResponse,
@@ -78,7 +79,7 @@ export interface OwbBridge {
   assetsRead(assetId: string): Promise<OwbApiResponse<AssetRecord>>;
   assetsCreate(request: AssetsCreateRequest): Promise<OwbApiResponse<AssetRecord>>;
   createTurn(request: { positionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval }): Promise<OwbApiResponse<TurnRecord>>;
-  cancelTurn(positionId: string): Promise<OwbApiResponse<{ cancelled: boolean; positionId: string }>>;
+  cancelTurn(request: string | CancelTurnRequest): Promise<OwbApiResponse<{ cancelled: boolean; positionId: string }>>;
   turnHistory(positionId: string): Promise<OwbApiResponse<TurnHistory>>;
   createSession(request: { positionId: string }): Promise<OwbApiResponse<WorkbenchSession>>;
   sessions(positionId: string): Promise<OwbApiResponse<WorkbenchSessionList>>;

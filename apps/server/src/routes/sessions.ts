@@ -125,23 +125,16 @@ export async function handleSessionRotate(
   parseEmpty(await readJsonBody<unknown>(req));
   assertTurnWorkspace(ctx, workspace);
   const source = await ctx.sessionStore.get(workspace.dir, assertSessionId(sessionId));
-  // Recover a persisted pre-restart running record before lifecycle mutation.
-  // An in-process running turn remains running and is rejected by rotate.
-  await ctx.turnStore.sessionHistory(
-    workspace.dir,
-    source.sessionId,
-    source.positionId,
-    new Date().toISOString(),
-  );
-  if (ctx.turnStore.hasActiveSessionTurns(workspace.dir, source.sessionId)) {
-    throw new OrgApiError(
-      errorCodes.session_conflict,
-      409,
-      "session has a running or persistence-indeterminate turn and cannot be rotated",
-    );
-  }
-  const result = await ctx.sessionStore.rotate(workspace.dir, source.sessionId);
-  sendJson(res, result.created ? 201 : 200, result.session);
+  const release = ctx.runningTurns.reserveMutation(workspace.dir, source.positionId);
+  try {
+    // Hold the employee exclusion across every asynchronous read and write.
+    await ctx.turnStore.sessionHistory(workspace.dir, source.sessionId, source.positionId, new Date().toISOString());
+    if (ctx.turnStore.hasActiveSessionTurns(workspace.dir, source.sessionId)) {
+      throw new OrgApiError(errorCodes.session_conflict, 409, "session has a running or persistence-indeterminate turn and cannot be rotated");
+    }
+    const result = await ctx.sessionStore.rotate(workspace.dir, source.sessionId);
+    sendJson(res, result.created ? 201 : 200, result.session);
+  } finally { release(); }
 }
 
 export async function handleSessionTurnPost(
@@ -190,8 +183,12 @@ export async function handleSessionContextPatch(
     throw new OrgApiError(errorCodes.session_request_invalid, 400, "session context accepts exactly enabled: boolean");
   }
   const id = assertSessionId(sessionId);
-  if (ctx.turnStore.hasActiveSessionTurns(workspace.dir, id)) {
-    throw new OrgApiError(errorCodes.session_conflict, 409, "session has an unresolved turn");
-  }
-  sendJson(res, 200, await ctx.sessionStore.setThreadContext(workspace.dir, id, body.enabled));
+  const session = await ctx.sessionStore.get(workspace.dir, id);
+  const release = ctx.runningTurns.reserveMutation(workspace.dir, session.positionId);
+  try {
+    if (ctx.turnStore.hasActiveSessionTurns(workspace.dir, id)) {
+      throw new OrgApiError(errorCodes.session_conflict, 409, "session has an unresolved turn");
+    }
+    sendJson(res, 200, await ctx.sessionStore.setThreadContext(workspace.dir, id, body.enabled));
+  } finally { release(); }
 }

@@ -107,7 +107,7 @@ test("POST /turns seals one Qoder turn, persists it with 0600 mode, and publishe
     const started = await sse.waitForEvent("turn.started");
     const startedEnvelope = JSON.parse(started.data) as { payload: Record<string, unknown> };
     assert.deepEqual(startedEnvelope.payload, {
-      turnId: record.turnId, positionId: "repo-owner", engine: "qoder",
+      turnId: record.turnId, positionId: "repo-owner", engine: "qoder", workspacePath: workspace,
       type: "run.started",
       runId: "run-1",
       timestamp: "2026-08-24T00:00:00.000Z",

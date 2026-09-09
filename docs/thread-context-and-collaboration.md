@@ -6,19 +6,19 @@ This source change implements [#214 R1](https://github.com/bytefolk/roleweave/is
 
 Select an employee, give them the project background and a first task, and wait for a completed response. Send a follow-up in the same session. The server includes a bounded selection of earlier completed requests and visible answers in the next model input. Reopening the workspace preserves these local records.
 
-Session settings contain a context switch. It is on by default, including for existing sessions; switching it off persists for that session. A fresh session starts without the previous session's history. A running session cannot change its context setting.
+Session settings contain a context switch. It is on by default, including for existing sessions; switching it off persists for that session. A fresh session starts without the previous session's history. A running personal or group task prevents that employee's session from being rotated or its context setting from changing.
 
 The context receipt shows the source count, actual UTF-8 bytes, digest, and a short excerpt of the data selected for the latest turn. These are measured input bytes, not a claimed model tokenizer count. An empty or disabled window displays zero. Older records without a receipt cannot establish what their model received.
 
 Context is limited to 12 source turns and 64 KiB including its framing; individual input and answer excerpts are limited to 8 KiB. The current request remains intact within the existing 256 KiB total input boundary. The first completed background and newest completed results have priority; the receipt exposes omitted or truncated data. This is bounded task continuity, not unlimited recall of every earlier detail.
 
-Only visible answer fields from trusted completed turns qualify. Failed, interrupted and running output does not become a previous successful answer. Recognizable credentials and private reasoning are filtered from selected history; this is best-effort sanitization, not a guarantee that arbitrary sensitive prose can be recognized. Context is sent to the configured AI host as task data. The host's existing role instructions, tool permissions and approval gates still apply.
+Only visible answer fields from trusted completed turns qualify. Failed, interrupted and running output does not become a previous successful answer. Recognizable credentials and private reasoning are filtered from complete selected fields before byte truncation; this is best-effort sanitization, not a guarantee that arbitrary sensitive prose can be recognized. Context is sent to the configured AI host as task data. The host's existing role instructions, tool permissions and approval gates still apply.
 
 ## Assign independent tasks
 
 Send the weekly report to employee A, select employee B and send the analysis task, then select employee C and prepare the customer reply. The employees can run concurrently. Switching employees preserves each conversation's pending task and draft, and a late result belongs to the employee/session that produced it.
 
-One employee has one active execution per workspace. A second overlapping assignment to that employee reports a conflict instead of replacing the running process. Cancel acts on that employee's execution. Selecting an idle employee does not start a model process or consume model tokens.
+One employee has one active execution per workspace. A second overlapping assignment to that employee reports a conflict instead of replacing the running process. Cancel retains the original workspace and, once known, the turn identity, so navigation cannot retarget it to another workspace or a later turn. Selecting an idle employee does not start a model process or consume model tokens.
 
 ## Run a parallel group or an ordered relay
 

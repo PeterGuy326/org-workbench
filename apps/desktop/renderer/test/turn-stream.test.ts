@@ -14,14 +14,26 @@ import type { GroupTimeline, TurnRecord } from "@roleweave/shared";
 const pending = { positionId: "repo-owner", engine: "qoder" as const, input: "检查发布" };
 
 function started(seq: number, runId: string) {
-  return { seq, type: "turn.started", payload: { runId, timestamp: "2026-08-24T05:00:00.000Z", type: "run.started" } };
+  return { seq, type: "turn.started", payload: { runId, positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:00.000Z", type: "run.started" } };
 }
 
 function delta(seq: number, runId: string, text: string) {
-  return { seq, type: "turn.model.delta", payload: { runId, timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text } };
+  return { seq, type: "turn.model.delta", payload: { runId, positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text } };
 }
 
 describe("turn stream reducer", () => {
+  it("rejects colliding sessionless runs from another employee or engine", () => {
+    let state = beginPendingTurn(EMPTY_TURN_STREAM, pending);
+    state = applyTurnEvent(state, { seq: 1, type: "turn.started", payload: { runId: "collision", positionId: "repo-owner", engine: "qoder" } });
+    for (const attribution of [{ positionId: "docs-writer", engine: "qoder" }, { positionId: "repo-owner", engine: "claude-code" }, {}]) {
+      for (const type of ["turn.model.delta", "turn.usage", "turn.completed", "turn.failed"]) {
+        const next = applyTurnEvent(state, { seq: 2, type, payload: { runId: "collision", text: "foreign secret", totalTokens: 999, ...attribution } });
+        expect(next.runs).toEqual(state.runs);
+      }
+    }
+    const own = applyTurnEvent(state, { seq: 2, type: "turn.model.delta", payload: { runId: "collision", positionId: "repo-owner", engine: "qoder", text: "own result" } });
+    expect(own.runs.collision?.text).toBe("own result");
+  });
   it("binds the first observed runId to the pending POST and appends deltas", () => {
     let state = beginPendingTurn(EMPTY_TURN_STREAM, pending);
     state = applyTurnEvent(state, started(1, "run-1"));
@@ -75,7 +87,7 @@ describe("turn stream reducer", () => {
     state = applyTurnEvent(state, {
       seq: 3,
       type: "turn.completed",
-      payload: { runId: "run-1", timestamp: "2026-08-24T05:00:02.000Z", type: "run.completed", output: "结果", terminalReason: "goal_met" },
+      payload: { runId: "run-1", positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:02.000Z", type: "run.completed", output: "结果", terminalReason: "goal_met" },
     });
     expect(state.runs).toEqual({});
   });
@@ -144,13 +156,13 @@ describe("turn stream reducer", () => {
     state = applyTurnEvent(state, {
       seq: 2,
       type: "turn.usage",
-      payload: { runId: "run-1", timestamp: "2026-08-24T05:00:01.500Z", type: "usage", inputTokens: 120, outputTokens: 80, totalTokens: 200 },
+      payload: { runId: "run-1", positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:01.500Z", type: "usage", inputTokens: 120, outputTokens: 80, totalTokens: 200 },
     });
     expect(state.runs["run-1"]?.totalTokens).toBe(200);
     state = applyTurnEvent(state, {
       seq: 3,
       type: "turn.usage",
-      payload: { runId: "run-1", timestamp: "2026-08-24T05:00:02.500Z", type: "usage", totalTokens: 480 },
+      payload: { runId: "run-1", positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:02.500Z", type: "usage", totalTokens: 480 },
     });
     expect(state.runs["run-1"]?.totalTokens).toBe(480);
   });
@@ -161,13 +173,13 @@ describe("turn stream reducer", () => {
     const unknownRun = applyTurnEvent(state, {
       seq: 2,
       type: "turn.usage",
-      payload: { runId: "run-9", timestamp: "2026-08-24T05:00:01.500Z", type: "usage", totalTokens: 999 },
+      payload: { runId: "run-9", positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:01.500Z", type: "usage", totalTokens: 999 },
     });
     expect(unknownRun.runs).toEqual(state.runs);
     const invalid = applyTurnEvent(state, {
       seq: 3,
       type: "turn.usage",
-      payload: { runId: "run-1", timestamp: "2026-08-24T05:00:01.500Z", type: "usage", totalTokens: "many" },
+      payload: { runId: "run-1", positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:01.500Z", type: "usage", totalTokens: "many" },
     });
     expect(invalid.runs["run-1"]?.totalTokens).toBeNull();
   });
@@ -401,7 +413,7 @@ describe("personal dialog baseline regression (#51)", () => {
       state = applyTurnEvent(state, {
         seq: 2,
         type: "turn.model.delta",
-        payload: { runId: "run-1", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text: "个人增量", groupRef },
+        payload: { runId: "run-1", positionId: "repo-owner", engine: "qoder", timestamp: "2026-08-24T05:00:01.000Z", type: "model.delta", text: "个人增量", groupRef },
       });
       expect(state.runs["run-1"]?.text).toBe("个人增量");
       expect(state.runs["run-1"]?.groupRef).toBeUndefined();
@@ -560,7 +572,7 @@ describe("conversationRef back-link grouping (#63)", () => {
     state = applyTurnEvent(state, started(1, "run-1"));
     state = applyTurnEvent(
       state,
-      backlinkDelta(2, "run-1", "会话增量", { conversationRef: "session-1", turnId: "g-turn-9" }),
+      backlinkDelta(2, "run-1", "会话增量", { positionId: "repo-owner", engine: "qoder", conversationRef: "session-1", turnId: "g-turn-9" }),
     );
     expect(state.runs["run-1"]?.text).toBe("会话增量");
     expect(state.runs["run-1"]?.groupRef).toBeUndefined();
@@ -591,4 +603,70 @@ it("attributes interleaved personal runs to A/B/C and ignores unknown or wrong-s
   expect(state.runs["run-A"]).toBeUndefined();
   state = applyTurnEvent(state, { seq: ++seq, type: "turn.indeterminate", payload: { positionId: "B", sessionId: "session-B" } });
   expect(Object.keys(state.runs)).toEqual(["run-C"]);
+});
+
+it("keeps both sessionless employees live when their processes choose the same runId", () => {
+  let state = beginPendingTurn(EMPTY_TURN_STREAM, { positionId: "A", engine: "qoder", input: "task A" });
+  state = beginPendingTurn(state, { positionId: "B", engine: "qoder", input: "task B" });
+  let seq = 0;
+  const event = (type: string, positionId: string, text?: string) => ({ seq: ++seq, type, payload: { runId: "collision", engine: "qoder", positionId, text } });
+  state = applyTurnEvent(state, event("turn.started", "A"));
+  state = applyTurnEvent(state, event("turn.started", "B"));
+  state = applyTurnEvent(state, event("turn.model.delta", "A", "result A"));
+  state = applyTurnEvent(state, event("turn.model.delta", "B", "result B"));
+  expect(Object.values(state.runs).map((run) => [run.positionId, run.text])).toEqual([["A", "result A"], ["B", "result B"]]);
+  state = applyTurnEvent(state, event("turn.completed", "A"));
+  state = settlePendingTurn(state, { runId: "collision", positionId: "A" });
+  expect(Object.values(state.runs).map((run) => [run.positionId, run.text])).toEqual([["B", "result B"]]);
+  state = applyTurnEvent(state, event("turn.model.delta", "B", " continues"));
+  expect(Object.values(state.runs)[0]?.text).toBe("result B continues");
+  state = applyTurnEvent(state, event("turn.completed", "B"));
+  expect(state.runs).toEqual({});
+});
+
+it("never lets a settled personal turn rebind a new pending request", () => {
+  const request = { ...pending, sessionId: "session-A" };
+  let seq = 0;
+  const event = (type: string, turnId: string, runId = "reused-run") => ({ seq: ++seq, type,
+    payload: { positionId: request.positionId, sessionId: request.sessionId, engine: request.engine, turnId, runId, text: turnId } });
+  let state = beginPendingTurn(EMPTY_TURN_STREAM, request);
+  state = applyTurnEvent(state, event("turn.started", "old-turn"));
+  state = applyTurnEvent(state, event("turn.indeterminate", "old-turn"));
+  state = settlePendingTurn(state, { positionId: request.positionId, sessionId: request.sessionId, runId: "reused-run" });
+  state = beginPendingTurn(state, { ...request, input: "new task" });
+  for (const type of ["turn.started", "turn.model.delta"]) {
+    state = applyTurnEvent(state, event(type, "old-turn"));
+    expect(state.pending[request.positionId]?.runId).toBeNull();
+    expect(state.runs).toEqual({});
+  }
+  state = applyTurnEvent(state, event("turn.started", "new-turn"));
+  state = applyTurnEvent(state, event("turn.model.delta", "new-turn"));
+  expect(state.pending[request.positionId]?.turnId).toBe("new-turn");
+  expect(Object.values(state.runs)[0]?.text).toBe("new-turn");
+});
+
+it("uses known personal turn identity for deltas, usage and every terminal", () => {
+  const request = { ...pending, sessionId: "session-A" };
+  let state = beginPendingTurn(EMPTY_TURN_STREAM, request);
+  const own = { positionId: request.positionId, sessionId: request.sessionId, engine: request.engine, runId: "same-run", turnId: "new-turn" };
+  state = applyTurnEvent(state, { seq: 1, type: "turn.started", payload: own });
+  for (const type of ["turn.started", "turn.model.delta", "turn.usage", "turn.completed", "turn.failed", "turn.indeterminate"]) {
+    const next = applyTurnEvent(state, { seq: 2, type, payload: { ...own, turnId: "stale-turn", text: "foreign", totalTokens: 999 } });
+    expect(next.runs).toEqual(state.runs);
+    expect(next.pending).toEqual(state.pending);
+  }
+  const legacy = { positionId: request.positionId, sessionId: request.sessionId, engine: request.engine, runId: "same-run" };
+  state = applyTurnEvent(state, { seq: 2, type: "turn.model.delta", payload: { ...legacy, text: "legacy delta" } });
+  expect(Object.values(state.runs)[0]?.text).toBe("legacy delta");
+  state = applyTurnEvent(state, { seq: 3, type: "turn.indeterminate", payload: legacy });
+  expect(state.runs).toEqual({});
+});
+
+it("rejects old SSE after terminal HTTP readback even if no engine event was observed", () => {
+  let state = beginPendingTurn(EMPTY_TURN_STREAM, pending);
+  state = settlePendingTurn(state, { positionId: pending.positionId, runId: "old-run", turnId: "http-settled" });
+  state = beginPendingTurn(state, { ...pending, input: "new task" });
+  state = applyTurnEvent(state, { seq: 1, type: "turn.started", payload: { positionId: pending.positionId, engine: pending.engine, runId: "old-run", turnId: "http-settled" } });
+  expect(state.pending[pending.positionId]?.runId).toBeNull();
+  expect(state.runs).toEqual({});
 });

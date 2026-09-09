@@ -19,7 +19,7 @@ import type { OpenWorkspace } from "../workspace-state.js";
 import { readJsonBody, sendJson } from "../http.js";
 import { createTurnEnvelope } from "../turns/envelope.js";
 import { DeltaForwarder } from "../turns/delta-forwarder.js";
-import { assertPositionId } from "../turns/store.js";
+import { assertPositionId, compareRfc3339Instants, compareCodeUnitOrdinal } from "../turns/store.js";
 import { compactThreadContextHistory, materializeThreadContext, type SupplementalContext, type ThreadContextSource } from "../turns/thread-context.js";
 
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -168,39 +168,79 @@ export async function executeTurn(
 ): Promise<TurnRecord> {
   const workspace = expectedWorkspace ?? ctx.workspace.requireOpen();
   assertTurnWorkspace(ctx, workspace);
-  const reservation = ctx.runningTurns.reserve(workspace.dir, body.positionId);
+  const turnId = group !== undefined ? group.turnId : crypto.randomUUID();
+  const reservation = ctx.runningTurns.reserve(workspace.dir, body.positionId, turnId);
   try {
     // Group spawns carry a pre-assigned turnId so the 202 spawn list and the
     // executed envelope share one identity; personal turns keep server-random.
-    const turnId = group !== undefined ? group.turnId : crypto.randomUUID();
     const createdAt = new Date().toISOString();
     // owb#63 clearing (de#205): the contract-level back-link rides the v1alpha2
     // envelope — group spawns echo the group conversationRef, session turns echo
     // the sessionId, bare personal turns stay v1 byte-exact.
     const conversationRef =
       group !== undefined ? group.groupRef : session !== undefined ? session.sessionId : undefined;
-    const attribution = group ?? {
+    const attribution = { workspacePath: workspace.dir, ...(group ?? {
       turnId, positionId: body.positionId, engine: body.engine,
       ...(session !== undefined ? { sessionId: session.sessionId, conversationRef: session.sessionId } : {}),
-    };
+    }) };
     let history: ThreadContextSource[] = [];
     let omittedTurnCount = 0;
     let historyTruncated = false;
+    let historyRedacted = false;
     if (session !== undefined && session.threadContextEnabled !== false) {
       history = (await ctx.turnStore.sessionHistory(workspace.dir, session.sessionId, session.positionId, createdAt)).turns;
     } else if (group !== undefined) {
       const conversation = await ctx.groupStore.get(workspace.dir, group.groupRef);
-      // Membership is server-owned. Only this exact group's completed messages
-      // may cross employee boundaries; personal session histories stay private.
-      for (const member of conversation.members) {
-        const memberHistory = await ctx.turnStore.history(workspace.dir, member, createdAt);
-        const compact = compactThreadContextHistory(memberHistory.turns.filter((turn) =>
-          turn.conversationRef === group.groupRef || (turn.conversationRef === undefined && turn.groupRef === group.groupRef)));
-        history.push(...compact.turns);
-        omittedTurnCount += compact.omittedTurnCount;
-        historyTruncated ||= compact.truncated;
+      // Read accepted identities from this group instead of every employee's
+      // personal history. Corrupt sources are omitted individually.
+      const messages = await ctx.groupStore.readContextMessages(workspace.dir, group.groupRef);
+      const memberSources = new Map<string, ThreadContextSource[]>();
+      const seen = new Set<string>();
+      const belongs = (turn: TurnRecord): boolean => turn.conversationRef === group.groupRef ||
+        (turn.conversationRef === undefined && turn.groupRef === group.groupRef);
+      const compare = (left: ThreadContextSource, right: ThreadContextSource): number =>
+        compareRfc3339Instants(left.createdAt, right.createdAt) || compareCodeUnitOrdinal(left.turnId, right.turnId);
+      for (const message of messages) {
+        for (const spawn of message.spawns ?? []) {
+          if (!conversation.members.includes(spawn.positionId) || seen.has(spawn.turnId)) continue;
+          seen.add(spawn.turnId);
+          try {
+            const source = await ctx.turnStore.readPositionTurn(workspace.dir, spawn.positionId, spawn.turnId, createdAt);
+            if (source === null || !belongs(source) || source.status !== "completed") continue;
+            const candidates = memberSources.get(spawn.positionId) ?? [];
+            candidates.push(source);
+            candidates.sort(compare);
+            // Release large event/output payloads before reading another source.
+            const compact = compactThreadContextHistory(candidates);
+            memberSources.set(spawn.positionId, compact.turns);
+            omittedTurnCount += compact.omittedTurnCount;
+            historyTruncated ||= compact.truncated;
+            historyRedacted ||= compact.redacted;
+          } catch (error) {
+            if (!(error instanceof OrgApiError) || error.code !== errorCodes.turn_storage_failed) throw error;
+            omittedTurnCount += 1;
+          }
+        }
       }
-      history.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.turnId.localeCompare(right.turnId, "en"));
+      // Legacy accepted messages did not persist spawn identities. Preserve
+      // their same-group history while isolating each damaged employee source.
+      const legacyMembers = new Set(messages.filter((message) => message.spawns === undefined).flatMap((message) => message.mentions));
+      for (const member of legacyMembers) {
+        if (!conversation.members.includes(member)) continue;
+        try {
+          const legacy = await ctx.turnStore.history(workspace.dir, member, createdAt);
+          const compact = compactThreadContextHistory(legacy.turns.filter((turn) => belongs(turn) && !seen.has(turn.turnId)));
+          history.push(...compact.turns);
+          omittedTurnCount += compact.omittedTurnCount;
+          historyTruncated ||= compact.truncated;
+          historyRedacted ||= compact.redacted;
+        } catch (error) {
+          if (!(error instanceof OrgApiError) || error.code !== errorCodes.turn_storage_failed) throw error;
+          omittedTurnCount += 1;
+        }
+      }
+      history.push(...[...memberSources.values()].flat());
+      history.sort(compare);
     }
     const context = materializeThreadContext({
       input: body.input,
@@ -208,6 +248,7 @@ export async function executeTurn(
       turns: history,
       omittedTurnCount,
       truncated: historyTruncated,
+      redacted: historyRedacted,
       ...(supplementalContext !== undefined ? { supplementalContext } : {}),
     });
     const envelope = createTurnEnvelope({
@@ -263,6 +304,10 @@ export async function executeTurn(
         diagnostic: "",
         code: "turn_driver_failure",
       };
+    } finally {
+      // A driver may settle without an engine terminal. Retire its timers
+      // and callbacks before durable completion and reservation release.
+      forwarder.close();
     }
 
     const updatedAt = new Date().toISOString();
@@ -369,18 +414,27 @@ export async function handleTurnCancel(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const workspace = ctx.workspace.requireOpen();
+  const workspace = ctx.workspace.active;
   const raw = await readJsonBody<unknown>(req);
-  assertTurnWorkspace(ctx, workspace);
-  if (!isRecord(raw) || Object.keys(raw).length !== 1 || typeof raw.positionId !== "string") {
-    throw new OrgApiError(
-      errorCodes.turn_request_invalid,
-      400,
-      "cancel request accepts exactly {positionId}",
-    );
+  const keys = isRecord(raw) ? Object.keys(raw).sort().join(",") : "";
+  if (!isRecord(raw) || !["positionId", "positionId,workspacePath", "positionId,turnId,workspacePath"].includes(keys) ||
+      typeof raw.positionId !== "string" ||
+      (Object.hasOwn(raw, "workspacePath") && (typeof raw.workspacePath !== "string" || raw.workspacePath.trim().length === 0 || raw.workspacePath.includes("\0") || Buffer.byteLength(raw.workspacePath) > 4096)) ||
+      (Object.hasOwn(raw, "turnId") && (typeof raw.turnId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(raw.turnId)))) {
+    throw new OrgApiError(errorCodes.turn_request_invalid, 400,
+      "cancel request accepts positionId and optional workspacePath with optional turnId");
+  }
+  let ownerWorkspace: string;
+  if (typeof raw.workspacePath === "string") {
+    // This is only an existing registry key, never a path to read from disk.
+    ownerWorkspace = raw.workspacePath;
+  } else {
+    if (workspace === null) ctx.workspace.requireOpen();
+    assertTurnWorkspace(ctx, workspace!);
+    ownerWorkspace = workspace!.dir;
   }
   const positionId = assertPositionId(raw.positionId);
-  if (!ctx.runningTurns.cancel(workspace.dir, positionId)) {
+  if (!ctx.runningTurns.cancel(ownerWorkspace, positionId, typeof raw.turnId === "string" ? raw.turnId : undefined)) {
     throw new OrgApiError(errorCodes.not_found, 404, `no running turn: ${positionId}`);
   }
   sendJson(res, 200, { cancelled: true, positionId });

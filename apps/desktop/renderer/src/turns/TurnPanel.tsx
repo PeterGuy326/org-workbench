@@ -272,7 +272,7 @@ export function TurnPanel({
           <span>{t("turn.contextLabel")}</span>
           <Switch size="small" aria-label={t("turn.contextToggle")}
             checked={selectedSession.threadContextEnabled !== false}
-            disabled={busy || sending || sessionBusy || selectedSession.status !== "active"}
+            disabled={busy || employeeBusy || sending || sessionBusy || selectedSession.status !== "active"}
             onChange={(enabled) => void onSetSessionContext?.(selectedSession.sessionId, enabled)} />
           <span>{selectedSession.threadContextEnabled === false ? t("turn.contextOff") : t("turn.contextOn")}</span>
           {lastContext ? (
@@ -393,7 +393,7 @@ export function TurnPanel({
               </label>
               {activeSession ? (
                 <AntButton
-                  disabled={sessionBusy || busy}
+                  disabled={sessionBusy || busy || employeeBusy || sending}
                   onClick={() => void onRotateSession?.(activeSession.sessionId)}
                   icon={<RefreshCw aria-hidden="true" size={13} />}
                 >

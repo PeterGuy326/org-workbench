@@ -444,3 +444,18 @@ it("does not label an older receipt as the latest call when newer history has no
   rerender(<TurnPanel {...props} turns={[turn({ id: "latest", threadContext: metadata }), turn({ id: "pending-next", status: "running", provisional: true })]} />);
   expect(screen.getByText("上次调用：7 轮 · 890 字节")).toBeInTheDocument();
 });
+
+it("blocks context changes and rotation while this employee runs in a group", () => {
+  const session = { schemaVersion: "workbench-session.v1" as const, sessionId: "group-busy-session", positionId: "repo-owner", workspaceInstanceId: "ws", principal: "position.repo-owner", status: "active" as const, rotatedFrom: null, rotatedTo: null, createdAt: "2026-09-08T00:00:00Z", rotatedAt: null };
+  const toggle = vi.fn();
+  const rotate = vi.fn();
+  render(<TurnPanel workspaceOpen positions={positions} selectedPositionId="repo-owner" selectedSessionId={session.sessionId}
+    sessions={[session]} engine="qoder" engineAvailability={availability} turns={[]} employeeBusy
+    onSelectPosition={vi.fn()} onSelectEngine={vi.fn()} onCreateTurn={vi.fn()} onSetSessionContext={toggle} onRotateSession={rotate} />);
+  expect(screen.getByRole("switch", { name: "启用会话上下文" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("switch", { name: "启用会话上下文" }));
+  fireEvent.click(screen.getByText("会话设置"));
+  expect(screen.getByRole("button", { name: "轮换当前会话" })).toBeDisabled();
+  expect(toggle).not.toHaveBeenCalled();
+  expect(rotate).not.toHaveBeenCalled();
+});

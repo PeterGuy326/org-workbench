@@ -16,6 +16,13 @@ export const TURN_HISTORY_SCHEMA_VERSION = "turn-history.v1" as const;
 export const turnEngines = ["qoder", "claude-code", "claude-local"] as const;
 export type TurnEngine = (typeof turnEngines)[number];
 
+/** Explicit owner paths select only an already active in-memory reservation. */
+export type CancelTurnRequest = { positionId: string } | {
+  positionId: string;
+  workspacePath: string;
+  turnId?: string;
+};
+
 export type TurnTerminalReason =
   | "goal_met"
   | "invalid_output_exhausted"

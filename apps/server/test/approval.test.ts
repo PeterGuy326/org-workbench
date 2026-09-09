@@ -317,7 +317,7 @@ test("approval events broadcast as turn.approval.* SSE with the validated engine
     const requested = await sse.waitForEvent("turn.approval.requested");
     const requestedPayload = JSON.parse(requested.data) as { payload: Record<string, unknown> };
     assert.deepEqual(requestedPayload.payload, {
-      turnId: record.turnId, positionId: "repo-owner", engine: "qoder",
+      workspacePath: workspace, turnId: record.turnId, positionId: "repo-owner", engine: "qoder",
       type: "approval.requested",
       runId: "run-1",
       timestamp: "2026-08-24T00:00:01.000Z",
