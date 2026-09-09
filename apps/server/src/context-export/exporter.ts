@@ -294,7 +294,8 @@ function isValidSession(session: WorkbenchSession): boolean {
     "schemaVersion", "sessionId", "workspaceInstanceId", "positionId", "principal",
     "status", "rotatedFrom", "rotatedTo", "createdAt", "rotatedAt",
   ].sort();
-  const baseValid = Object.keys(session).sort().join(",") === expectedKeys.join(",") &&
+  const baseValid = Object.keys(session).filter((key) => key !== "threadContextEnabled").sort().join(",") === expectedKeys.join(",") &&
+    (session.threadContextEnabled === undefined || typeof session.threadContextEnabled === "boolean") &&
     session.schemaVersion === "workbench-session.v1" &&
     UUID_PATTERN.test(session.sessionId) &&
     UUID_PATTERN.test(session.workspaceInstanceId) &&

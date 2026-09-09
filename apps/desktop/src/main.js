@@ -77,6 +77,7 @@ const {
   sessionListPath,
   sessionPath,
   validateSessionCreateRequest,
+  validateSessionContextRequest,
   validateSessionId,
   validateSessionTurnRequest,
 } = require("./session-ipc.cjs");
@@ -661,6 +662,12 @@ ipcMain.handle("owb:session:get", async (_event, sessionId) => {
     return { status: 400, body: { code: "session_request_invalid", message: "sessionId is invalid", retryable: false } };
   }
   return apiRequest(pathname);
+});
+
+ipcMain.handle("owb:session:context", async (_event, request) => {
+  const validated = validateSessionContextRequest(request);
+  if (!validated.ok) return validated.response;
+  return apiRequest(`/sessions/${validated.sessionId}/context`, { method: "PATCH", body: validated.request });
 });
 
 ipcMain.handle("owb:session:rotate", async (_event, sessionId) => {
