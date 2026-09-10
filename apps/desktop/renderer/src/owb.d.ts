@@ -18,6 +18,10 @@ import type {
   GroupConversation,
   GroupConversationList,
   GroupTimeline,
+  Goal,
+  GoalList,
+  GoalNode,
+  GoalView,
   HealthResponse,
   ChangeManifest,
   CancelTurnRequest,
@@ -66,6 +70,11 @@ export interface OwbBridge {
   orgUndo(): Promise<OwbApiResponse<OrgUndoResult>>;
   hire(request: HirePositionRequest): Promise<OwbApiResponse<HireResult>>;
   reports(): Promise<OwbApiResponse<ReportsResponse>>;
+  goals(): Promise<OwbApiResponse<GoalList>>;
+  goal(goalId: string): Promise<OwbApiResponse<GoalView>>;
+  createGoal(request: { title: string; description: string; acceptanceCriteria: string[] }): Promise<OwbApiResponse<Goal>>;
+  updateGoal(request: { goalId: string; update: { status: "active" | "paused" | "completed" | "abandoned" } | { criterionId: string; criterionStatus: "open" | "met" | "blocked" } }): Promise<OwbApiResponse<Goal>>;
+  createGoalNode(request: { goalId: string; node: { kind: "milestone" | "task"; label: string; parentNodeId?: string; positionId?: string } }): Promise<OwbApiResponse<GoalNode>>;
   position(positionId: string): Promise<OwbApiResponse>;
   positionDocs(positionId: string): Promise<OwbApiResponse<DocsFileListResponse>>;
   positionDocFile(positionId: string, filePath: string): Promise<OwbApiResponse<DocsFileResponse>>;
@@ -78,7 +87,7 @@ export interface OwbBridge {
   assetsList(): Promise<OwbApiResponse<AssetsListResponse>>;
   assetsRead(assetId: string): Promise<OwbApiResponse<AssetRecord>>;
   assetsCreate(request: AssetsCreateRequest): Promise<OwbApiResponse<AssetRecord>>;
-  createTurn(request: { positionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval }): Promise<OwbApiResponse<TurnRecord>>;
+  createTurn(request: { positionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval; goalId?: string; goalNodeId?: string }): Promise<OwbApiResponse<TurnRecord>>;
   cancelTurn(request: string | CancelTurnRequest): Promise<OwbApiResponse<{ cancelled: boolean; positionId: string }>>;
   turnHistory(positionId: string): Promise<OwbApiResponse<TurnHistory>>;
   createSession(request: { positionId: string }): Promise<OwbApiResponse<WorkbenchSession>>;
@@ -86,13 +95,13 @@ export interface OwbBridge {
   session(sessionId: string): Promise<OwbApiResponse<WorkbenchSession>>;
   sessionSetContext(request: { sessionId: string; enabled: boolean }): Promise<OwbApiResponse<WorkbenchSession>>;
   rotateSession(sessionId: string): Promise<OwbApiResponse<WorkbenchSession>>;
-  createSessionTurn(request: { sessionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval }): Promise<OwbApiResponse<TurnRecord>>;
+  createSessionTurn(request: { sessionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval; goalId?: string; goalNodeId?: string }): Promise<OwbApiResponse<TurnRecord>>;
   sessionTurnHistory(sessionId: string): Promise<OwbApiResponse<TurnHistory>>;
   createGroup(request: { memberPositionIds: string[] }): Promise<OwbApiResponse<GroupConversation>>;
   groups(): Promise<OwbApiResponse<GroupConversationList>>;
   group(conversationRef: string): Promise<OwbApiResponse<GroupConversation>>;
   addGroupMember(request: { conversationRef: string; positionId: string }): Promise<OwbApiResponse<GroupConversation>>;
-  createGroupTurn(request: { conversationRef: string; input: string; engine: TurnEngine; mentions: string[]; mode?: "parallel" | "relay" }): Promise<OwbApiResponse<{ conversationRef: string; messageId: string; spawns: Array<{ turnId: string; positionId: string }> }>>;
+  createGroupTurn(request: { conversationRef: string; input: string; engine: TurnEngine; mentions: string[]; mode?: "parallel" | "relay"; goalId?: string; goalNodeId?: string }): Promise<OwbApiResponse<{ conversationRef: string; messageId: string; spawns: Array<{ turnId: string; positionId: string }> }>>;
   groupTimeline(conversationRef: string): Promise<OwbApiResponse<GroupTimeline>>;
   drive: {
     list(q?: string): Promise<OwbApiResponse<DriveObjectListResponse>>;

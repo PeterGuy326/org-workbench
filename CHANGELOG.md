@@ -37,6 +37,9 @@
 - #155：Windows 目录 fsync 的 EPERM 判断收回唯一的原子写入口（context export 不再自带第二份），裸 errno 通过 `cause` 穿过 groups/assets/sessions/turns 各自的存储错误包装；平台改为可注入后，这批回归在 POSIX runner 上真正执行而不是 skip。
 
 ### Added
+
+- #222：新增用户拥有的 Goal 主线：Goal/节点/边/活动在工作区本地持久化，个人会话与群组并行/接力回合可绑定并回写 completed/failed/indeterminate，全局状态经 `goal.updated` SSE 投影；桌面端增加目标主线模块、验收标准和三维语义投影预览。
+
 ### Added
 
 - #127 AC-004 跨平台布局一致性证据：新增 layout smoke 模式（macOS arm64 / Windows x64 双平台，全应用渲染两栏组织工作区并由 main 进程度量列矩形写报告），verify.yml 新增 layout-parity job 下载双平台报告比对（per-platform bottomDelta ≤2px、跨平台宽差 ≤4px / 高差 ≤8px，阈值声明在 scripts/check-layout-parity.mjs）。顺带修 #150 打包缺口：doc-plane.js 未登记 SERVER_RUNTIME_FILES 导致打包 server 启动即崩、main CI 红。

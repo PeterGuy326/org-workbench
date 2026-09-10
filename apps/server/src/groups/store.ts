@@ -164,7 +164,7 @@ function isGroupMessage(value: unknown): value is GroupMessage {
   const required = ["schemaVersion", "messageId", "conversationRef", "input", "mentions", "createdAt"];
   return (
     required.every((key) => Object.hasOwn(record, key)) &&
-    Object.keys(record).every((key) => [...required, "mode", "spawns", "engine"].includes(key)) &&
+    Object.keys(record).every((key) => [...required, "mode", "spawns", "engine", "goalId", "goalNodeId"].includes(key)) &&
     record.schemaVersion === GROUP_MESSAGE_SCHEMA_VERSION &&
     isSafeMessageId(record.messageId) &&
     typeof record.conversationRef === "string" &&
@@ -174,6 +174,8 @@ function isGroupMessage(value: unknown): value is GroupMessage {
     record.mentions.every((member) => isPositionId(member)) &&
     (record.mode === undefined || record.mode === "parallel" || record.mode === "relay") &&
     (record.engine === undefined || turnEngines.includes(record.engine as typeof turnEngines[number])) &&
+    (record.goalId === undefined || (typeof record.goalId === "string" && record.goalId.length > 0 && record.goalId.length <= 256)) &&
+    (record.goalNodeId === undefined || (typeof record.goalNodeId === "string" && record.goalNodeId.length > 0 && record.goalNodeId.length <= 256)) &&
     (record.spawns === undefined || (
       record.engine !== undefined &&
       Array.isArray(record.spawns) && record.spawns.length === record.mentions.length &&

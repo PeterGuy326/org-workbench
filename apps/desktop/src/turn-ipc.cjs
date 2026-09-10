@@ -1,5 +1,6 @@
 const { isPositionId } = require("@roleweave/shared/position-id");
 const { validatePendingApproval } = require("./approval-ipc.cjs");
+const { validateGoalId } = require("./goal-ipc.cjs");
 const MAX_INPUT_BYTES = 256 * 1024;
 const TURN_ENGINES = new Set(["qoder", "claude-code", "claude-local"]);
 
@@ -16,10 +17,11 @@ function validateCreateTurnRequest(value) {
     return { ok: false, response: invalid("turn request must be an object") };
   }
   const keys = Object.keys(value).sort();
-  if (keys.join(",") !== "engine,input,positionId" && keys.join(",") !== "engine,input,pendingApproval,positionId") {
+  const allowed = new Set(["engine", "input", "positionId", "pendingApproval", "goalId", "goalNodeId"]);
+  if (!keys.includes("engine") || !keys.includes("input") || !keys.includes("positionId") || keys.some((key) => !allowed.has(key))) {
     return {
       ok: false,
-      response: invalid("turn request accepts exactly positionId, input, engine, and optional pendingApproval"),
+      response: invalid("turn request accepts positionId, input, engine, optional pendingApproval, goalId, and goalNodeId"),
     };
   }
   if (!validatePositionId(value.positionId)) {
@@ -35,6 +37,12 @@ function validateCreateTurnRequest(value) {
   if (typeof value.engine !== "string" || !TURN_ENGINES.has(value.engine)) {
     return { ok: false, response: invalid("engine must be qoder, claude-code, or claude-local") };
   }
+  if (value.goalId !== undefined && !validateGoalId(value.goalId)) {
+    return { ok: false, response: invalid("goalId is invalid") };
+  }
+  if (value.goalNodeId !== undefined && (!validateGoalId(value.goalNodeId) || value.goalId === undefined)) {
+    return { ok: false, response: invalid("goalNodeId requires a valid goalId") };
+  }
   let pendingApproval;
   if (value.pendingApproval !== undefined) {
     const checked = validatePendingApproval(value.pendingApproval);
@@ -48,6 +56,8 @@ function validateCreateTurnRequest(value) {
       input: value.input,
       engine: value.engine,
       ...(pendingApproval !== undefined ? { pendingApproval } : {}),
+      ...(value.goalId !== undefined ? { goalId: value.goalId } : {}),
+      ...(value.goalNodeId !== undefined ? { goalNodeId: value.goalNodeId } : {}),
     },
   };
 }

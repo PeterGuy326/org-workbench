@@ -27,6 +27,7 @@ export interface TurnPanelProps {
   sessions?: WorkbenchSession[];
   selectedSessionId?: string | null;
   sessionBusy?: boolean;
+  goalId?: string | null;
   onSelectPosition: (positionId: string) => void;
   onSelectEngine: (engine: TurnEngine) => void;
   onCreateTurn: (request: CreateTurnRequest) => void | boolean | Promise<void | boolean>;
@@ -150,6 +151,7 @@ export function TurnPanel({
   sessions,
   selectedSessionId = null,
   sessionBusy = false,
+  goalId = null,
   onSelectPosition,
   onSelectEngine,
   onCreateTurn,
@@ -221,7 +223,7 @@ export function TurnPanel({
     if (!trimmed || disabledReason || !selectedPosition || sendingRef.current.has(draftKey)) return;
     setSending(true);
     try {
-      const created = await onCreateTurn({ positionId: selectedPosition.id, engine, input: trimmed });
+      const created = await onCreateTurn({ positionId: selectedPosition.id, engine, input: trimmed, ...(goalId !== null ? { goalId } : {}) });
       if (created !== false) setDrafts((current) => current[draftKey] === input ? { ...current, [draftKey]: "" } : current);
     } finally {
       setSending(false);

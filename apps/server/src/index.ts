@@ -19,6 +19,7 @@ import { SessionStore } from "./sessions/store.js";
 import { GroupStore } from "./groups/store.js";
 import { ContextCliAdapterClient } from "./context-export/adapter-cli.js";
 import { ContextExportService } from "./context-export/exporter.js";
+import { GoalStore } from "./goals/store.js";
 
 const config = resolveServerConfig(process.env, process.argv.slice(2));
 const driver = new DigitalEmployeeCliDriver(
@@ -37,6 +38,7 @@ const ctx: ControlPlaneContext = {
   runningTurns: new RunningTurnRegistry(),
   sessionStore: new SessionStore(),
   groupStore: new GroupStore(),
+  goalStore: new GoalStore(),
   contextExporter: new ContextExportService(
     new ContextCliAdapterClient(config.contextCliCommand, process.env),
   ),

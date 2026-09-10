@@ -72,6 +72,13 @@ const {
   validateDriveUploadRequest,
 } = require("./drive-ipc.cjs");
 const { validateHireRequest } = require("./hire-ipc.cjs");
+const {
+  validateGoalCreateRequest,
+  validateGoalId,
+  validateGoalNodeCreateRequest,
+  validateGoalPath,
+  validateGoalUpdateRequest,
+} = require("./goal-ipc.cjs");
 const { turnHistoryPath, validateCancelRequest, validateCreateTurnRequest } = require("./turn-ipc.cjs");
 const {
   sessionListPath,
@@ -620,6 +627,38 @@ ipcMain.handle("owb:assets:create", async (_event, request) => {
   const validated = validateAssetsCreateRequest(request);
   if (!validated.ok) return validated.response;
   return apiRequest("/assets/create", { method: "POST", body: validated.request });
+});
+
+ipcMain.handle("owb:goal:list", async () => apiRequest("/goals"));
+
+ipcMain.handle("owb:goal:get", async (_event, goalId) => {
+  const pathname = validateGoalPath(goalId);
+  if (pathname === null) return { status: 400, body: { code: "goal_request_invalid", message: "goalId is invalid", retryable: false } };
+  return apiRequest(pathname);
+});
+
+ipcMain.handle("owb:goal:create", async (_event, request) => {
+  const validated = validateGoalCreateRequest(request);
+  if (!validated.ok) return validated.response;
+  return apiRequest("/goals", { method: "POST", body: validated.request });
+});
+
+ipcMain.handle("owb:goal:update", async (_event, request) => {
+  if (request === null || typeof request !== "object" || Array.isArray(request) || !validateGoalId(request.goalId)) {
+    return { status: 400, body: { code: "goal_request_invalid", message: "goalId is invalid", retryable: false } };
+  }
+  const validated = validateGoalUpdateRequest(request.update);
+  if (!validated.ok) return validated.response;
+  return apiRequest(validateGoalPath(request.goalId), { method: "PATCH", body: validated.request });
+});
+
+ipcMain.handle("owb:goal:node:create", async (_event, request) => {
+  if (request === null || typeof request !== "object" || Array.isArray(request) || !validateGoalId(request.goalId)) {
+    return { status: 400, body: { code: "goal_request_invalid", message: "goalId is invalid", retryable: false } };
+  }
+  const validated = validateGoalNodeCreateRequest(request.node);
+  if (!validated.ok) return validated.response;
+  return apiRequest(validateGoalPath(request.goalId, "/nodes"), { method: "POST", body: validated.request });
 });
 
 ipcMain.handle("owb:turn:create", async (_event, request) => {

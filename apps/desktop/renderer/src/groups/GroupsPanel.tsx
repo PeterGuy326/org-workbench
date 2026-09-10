@@ -24,6 +24,7 @@ export interface GroupsPanelProps {
    * still requires the operator to confirm ≥2 members. */
   draftSeed?: { members: string[]; nonce: number } | null;
   engine: TurnEngine;
+  goalId?: string | null;
   engineAvailability: Record<TurnEngine, TurnEngineAvailability>;
   /** Shared SSE projection; group runs carry groupRef and are filtered here. */
   liveRuns: Record<string, LiveRunState>;
@@ -91,6 +92,7 @@ export function GroupsPanel({
   positionColors,
   draftSeed,
   engine,
+  goalId = null,
   engineAvailability,
   liveRuns,
   onSelectEngine,
@@ -355,6 +357,7 @@ export function GroupsPanel({
         engine,
         mentions: [...mentions],
         mode: dispatchMode,
+        ...(goalId !== null ? { goalId } : {}),
       });
       if (!isCurrent()) return;
       if (res.status !== 202) {
@@ -373,7 +376,7 @@ export function GroupsPanel({
         setSendingGroups((current) => ({ ...current, [ref]: false }));
       }
     }
-  }, [captureScope, dispatchMode, engine, input, loadTimeline, mentions, onSpawnRuns, sending, t]);
+  }, [captureScope, dispatchMode, engine, goalId, input, loadTimeline, mentions, onSpawnRuns, sending, t]);
 
   /** Merge persisted timeline with live SSE buffers for this group. A run
    * whose turnId is already persisted is suppressed — the record wins. */

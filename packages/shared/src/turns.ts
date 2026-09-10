@@ -195,6 +195,9 @@ export interface TurnRecord {
    * pre-clearing group records stay readable on the timeline; new records
    * are written with conversationRef instead. */
   groupRef?: string;
+  /** Additive Goal spine link; absent on turns created before Goal support. */
+  goalId?: string;
+  goalNodeId?: string;
   threadContext?: ThreadContextMetadata;
 }
 

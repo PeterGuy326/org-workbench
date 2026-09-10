@@ -63,6 +63,14 @@ export const errorCodes = {
   group_conflict: "group_conflict",
   /** Workspace-local group state failed validation or atomic persistence (#52). */
   group_storage_failed: "group_storage_failed",
+  /** POST/PATCH/GET /goals request shape or identifier is invalid. */
+  goal_request_invalid: "goal_request_invalid",
+  /** A requested Goal does not exist in the open workspace. */
+  goal_missing: "goal_missing",
+  /** Goal lifecycle or graph mutation conflicts with current state. */
+  goal_conflict: "goal_conflict",
+  /** Workspace-local Goal graph failed validation or atomic persistence. */
+  goal_storage_failed: "goal_storage_failed",
   /** Doc routing request shape is invalid: missing/bad position or path params (#35 S2). */
   docs_request_invalid: "docs_request_invalid",
   /** Doc routing refused: path escapes the position dir, symlink, or non-allowlisted file (#35 S2). */

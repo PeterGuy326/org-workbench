@@ -388,7 +388,7 @@ export function isTurnRecord(value: unknown): value is TurnRecord {
       "schemaVersion", "conversationId", "turnId", "positionId", "engine", "status",
       "input", "envelopeDigest", "createdAt", "updatedAt", "events",
     ],
-    ["runId", "output", "error", "groupRef", "conversationRef", "threadContext"],
+    ["runId", "output", "error", "groupRef", "conversationRef", "goalId", "goalNodeId", "threadContext"],
   )) return false;
   if (Object.hasOwn(value, "threadContext") && !isThreadContextMetadata(value.threadContext)) return false;
   const createdInstant = parseRfc3339Instant(value.createdAt);
@@ -420,6 +420,8 @@ export function isTurnRecord(value: unknown): value is TurnRecord {
   if (hasRunId && !isBoundedIdentifier(value.runId)) return false;
   // Additive #52: local group conversationRef link (transition debt, 缺口①).
   if (Object.hasOwn(value, "groupRef") && !isBoundedIdentifier(value.groupRef)) return false;
+  if (Object.hasOwn(value, "goalId") && !isBoundedIdentifier(value.goalId)) return false;
+  if (Object.hasOwn(value, "goalNodeId") && !isBoundedIdentifier(value.goalNodeId)) return false;
   // owb#63: contract-level back-link bounds mirror upstream de#205 (1..256).
   if (
     Object.hasOwn(value, "conversationRef") &&
@@ -783,6 +785,9 @@ export class TurnStore {
     groupRef?: string;
     /** owb#63: contract-level back-link carried by the v1alpha2 envelope. */
     conversationRef?: string;
+    /** Additive Goal spine links; never included in the engine envelope. */
+    goalId?: string;
+    goalNodeId?: string;
   }): Promise<TurnRecord> {
     assertPositionId(input.positionId);
     turnRecordFile(input.workspace, input.positionId, input.turnId);
@@ -804,6 +809,8 @@ export class TurnStore {
       events: [],
       ...(input.groupRef !== undefined ? { groupRef: input.groupRef } : {}),
       ...(input.conversationRef !== undefined ? { conversationRef: input.conversationRef } : {}),
+      ...(input.goalId !== undefined ? { goalId: input.goalId } : {}),
+      ...(input.goalNodeId !== undefined ? { goalNodeId: input.goalNodeId } : {}),
     };
     const activeKey = this.activeTurnKey(input.workspace, input.positionId, input.turnId);
     this.activeTurns.add(activeKey);
@@ -840,6 +847,9 @@ export class TurnStore {
     now: string;
     /** owb#63: contract-level back-link (= sessionId for session turns). */
     conversationRef?: string;
+    /** Additive Goal spine links; never included in the engine envelope. */
+    goalId?: string;
+    goalNodeId?: string;
   }): Promise<TurnRecord> {
     const sessionId = assertSessionId(input.sessionId);
     assertPositionId(input.positionId);
@@ -866,6 +876,8 @@ export class TurnStore {
       updatedAt: input.now,
       events: [],
       ...(input.conversationRef !== undefined ? { conversationRef: input.conversationRef } : {}),
+      ...(input.goalId !== undefined ? { goalId: input.goalId } : {}),
+      ...(input.goalNodeId !== undefined ? { goalNodeId: input.goalNodeId } : {}),
     };
     const activeKey = this.sessionActiveTurnKey(input.workspace, sessionId, input.turnId);
     this.activeTurns.add(activeKey);

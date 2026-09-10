@@ -27,7 +27,7 @@ import type {
   WorkspaceCreateResponse,
   WorkspaceInfoResponse,
 } from "@roleweave/shared";
-import { BrainCircuit, Check, ChevronDown, Cog, FileChartColumn, FolderOpen, FolderPlus, Network, Plus, ShieldAlert, Undo2, UsersRound } from "lucide-react";
+import { BrainCircuit, Check, ChevronDown, Cog, FileChartColumn, FolderOpen, FolderPlus, Network, Plus, ShieldAlert, Target, Undo2, UsersRound } from "lucide-react";
 import { useThemeMode } from "./theme-toggle";
 import { PrefsMenu } from "./prefs-menu";
 import { persistLocale, seedLocale } from "./locale-mode";
@@ -62,6 +62,7 @@ import { ApprovalQueue, type ApprovalQueueItem } from "./approvals";
 import { decodeEscapedUnicode } from "./display-text";
 import { SettingsModule } from "./settings/SettingsModule";
 import { ProjectCreateDrawer } from "./project/ProjectCreateDrawer";
+import { GoalsPanel } from "./goals/GoalsPanel";
 
 interface PositionCardState {
   loading: boolean;
@@ -103,7 +104,7 @@ function AppInner({
   onChangeLocale: (next: OwbLocale) => void;
 }) {
   const [activeModule, setActiveModule] = useState<
-    "org" | "groups" | "reports" | "approvals" | "docs" | "settings"
+    "org" | "goals" | "groups" | "reports" | "approvals" | "docs" | "settings"
   >("org");
   const [memorySource, setMemorySource] = useState<MemorySource>("docs");
   /**
@@ -156,6 +157,7 @@ function AppInner({
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [backups, setBackups] = useState<OrgBackupEntry[]>([]);
   const [reports, setReports] = useState<ReportsResponse | null>(null);
+  const [activeGoalId, setActiveGoalId] = useState<string | null>(null);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [reportsError, setReportsError] = useState<string | null>(null);
   const [orgBusy, setOrgBusy] = useState(false);
@@ -310,6 +312,7 @@ function AppInner({
       setDecidedApprovals(new Set());
       setBackups([]);
       setReports(null);
+      setActiveGoalId(null);
       setReportsError(null);
     }
     setTreeLoading(false);
@@ -599,6 +602,8 @@ function AppInner({
         ...(request.pendingApproval !== undefined
           ? { pendingApproval: request.pendingApproval }
           : {}),
+        ...(request.goalId !== undefined ? { goalId: request.goalId } : {}),
+        ...(request.goalNodeId !== undefined ? { goalNodeId: request.goalNodeId } : {}),
       });
       if (res.status !== 200) {
         const message = apiErrorMessage(res.body, t("turn.createFail"));
@@ -1045,6 +1050,7 @@ function AppInner({
           label={t("misc.modules")}
           items={[
             { id: "org", label: t("rail.org"), icon: <Network aria-hidden="true" size={16} />, active: activeModule === "org", onSelect: () => setActiveModule("org") },
+            { id: "goals", label: t("rail.goals"), icon: <Target aria-hidden="true" size={16} />, active: activeModule === "goals", onSelect: () => setActiveModule("goals") },
             { id: "groups", label: t("rail.groups"), icon: <UsersRound aria-hidden="true" size={16} />, active: activeModule === "groups", onSelect: () => setActiveModule("groups") },
             { id: "reports", label: t("rail.reports"), icon: <FileChartColumn aria-hidden="true" size={16} />, active: activeModule === "reports", onSelect: () => { setActiveModule("reports"); void loadReports(); } },
             {
@@ -1217,7 +1223,14 @@ function AppInner({
             title={t("misc.lastWorkspaceFallback", { path: fallbackNotice })}
           />
         ) : null}
-        {activeModule === "reports" ? (
+        {activeModule === "goals" ? (
+          <GoalsPanel
+            workspaceOpen={workspaceInfo?.open === true}
+            positionNames={positionNames}
+            activeGoalId={activeGoalId}
+            onActiveGoalChange={setActiveGoalId}
+          />
+        ) : activeModule === "reports" ? (
           <ReportsCenter
             reports={reports}
             loading={reportsLoading}
@@ -1247,6 +1260,7 @@ function AppInner({
             positionColors={positionColors}
             draftSeed={groupDraftSeed?.scope === groupWorkspaceScope ? groupDraftSeed : null}
             engine={turnEngine}
+            goalId={activeGoalId}
             engineAvailability={engineAvailability}
             liveRuns={turnStream.runs}
             onSelectEngine={setTurnEngine}
@@ -1300,6 +1314,7 @@ function AppInner({
             positions={positions}
             selectedPositionId={selectedId}
             engine={turnEngine}
+            goalId={activeGoalId}
             engineAvailability={engineAvailability}
             turns={displayTurns}
             busy={turnBusy}

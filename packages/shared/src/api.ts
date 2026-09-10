@@ -24,6 +24,7 @@ export const routes = {
   hire: "/hire",
   positions: "/positions",
   reports: "/reports",
+  goals: "/goals",
   sessions: "/sessions",
   turns: "/turns",
   turnsCancel: "/turns/cancel",
@@ -81,6 +82,7 @@ export const sseEventTypes = [
   // @mentioned member spawn; group turn.* payloads additionally carry
   // additive groupRef/turnId/positionId fields for renderer attribution.
   "group.turn.spawned",
+  "goal.updated",
 ] as const;
 
 export type SseEventType = (typeof sseEventTypes)[number];

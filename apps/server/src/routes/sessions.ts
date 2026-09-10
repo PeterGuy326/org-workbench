@@ -4,6 +4,7 @@ import type { TurnEngine } from "@roleweave/shared";
 import type { ControlPlaneContext } from "../context.js";
 import { readJsonBody, sendJson } from "../http.js";
 import { assertSessionId } from "../sessions/store.js";
+import { assertGoalId } from "../goals/store.js";
 import { assertPositionExists, assertPendingApproval, assertTurnWorkspace, executeTurn } from "./turns.js";
 import type { TurnPendingApproval } from "@roleweave/shared";
 
@@ -42,15 +43,14 @@ function parseSessionTurn(raw: unknown): {
   input: string;
   engine: TurnEngine;
   pendingApproval?: TurnPendingApproval;
+  goalId?: string;
+  goalNodeId?: string;
 } {
-  if (
-    !isRecord(raw) ||
-    (!exactKeys(raw, ["input", "engine"]) && !exactKeys(raw, ["input", "engine", "pendingApproval"]))
-  ) {
+  if (!isRecord(raw) || !Object.hasOwn(raw, "input") || !Object.hasOwn(raw, "engine") || Object.keys(raw).some((key) => !["input", "engine", "pendingApproval", "goalId", "goalNodeId"].includes(key))) {
     throw new OrgApiError(
       errorCodes.turn_request_invalid,
       400,
-      "session turn accepts exactly input, engine, and optional pendingApproval",
+      "session turn accepts input, engine, optional pendingApproval, goalId, and goalNodeId",
     );
   }
   if (
@@ -66,12 +66,18 @@ function parseSessionTurn(raw: unknown): {
   if (typeof raw.engine !== "string" || !turnEngines.includes(raw.engine as TurnEngine)) {
     throw new OrgApiError(errorCodes.turn_engine_unsupported, 400, `engine must be ${turnEngines.join(" or ")}`);
   }
+  if (raw.goalId !== undefined) assertGoalId(raw.goalId);
+  if (raw.goalNodeId !== undefined && (typeof raw.goalNodeId !== "string" || raw.goalId === undefined)) {
+    throw new OrgApiError(errorCodes.goal_request_invalid, 400, "goalNodeId requires goalId");
+  }
   return {
     input: raw.input,
     engine: raw.engine as TurnEngine,
     ...(raw.pendingApproval !== undefined
       ? { pendingApproval: assertPendingApproval(raw.pendingApproval) }
       : {}),
+    ...(raw.goalId !== undefined ? { goalId: raw.goalId as string } : {}),
+    ...(raw.goalNodeId !== undefined ? { goalNodeId: raw.goalNodeId as string } : {}),
   };
 }
 

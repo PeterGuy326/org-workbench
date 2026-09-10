@@ -21,6 +21,7 @@ import { createTurnEnvelope } from "../turns/envelope.js";
 import { DeltaForwarder } from "../turns/delta-forwarder.js";
 import { assertPositionId, compareRfc3339Instants, compareCodeUnitOrdinal } from "../turns/store.js";
 import { compactThreadContextHistory, materializeThreadContext, type SupplementalContext, type ThreadContextSource } from "../turns/thread-context.js";
+import { assertGoalId } from "../goals/store.js";
 
 const MAX_INPUT_BYTES = 256 * 1024;
 
@@ -32,6 +33,9 @@ export interface TurnPostBody {
   pendingApproval?: TurnPendingApproval;
   /** Additive #52: set only by the group spawn path, never by a route body. */
   groupRef?: string;
+  /** Additive Goal spine binding; never forwarded in the engine envelope. */
+  goalId?: string;
+  goalNodeId?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,11 +60,13 @@ function parsePostBody(raw: unknown): TurnPostBody {
     throw new OrgApiError(errorCodes.turn_request_invalid, 400, "turn request must be a JSON object");
   }
   const keys = Object.keys(raw).sort();
-  if (keys.join(",") !== "engine,input,positionId" && keys.join(",") !== "engine,input,pendingApproval,positionId") {
+  const required = ["engine", "input", "positionId"];
+  const allowed = new Set([...required, "pendingApproval", "goalId", "goalNodeId"]);
+  if (!required.every((key) => Object.hasOwn(raw, key)) || keys.some((key) => !allowed.has(key))) {
     throw new OrgApiError(
       errorCodes.turn_request_invalid,
       400,
-      "turn request accepts exactly positionId, input, engine, and optional pendingApproval",
+      "turn request accepts positionId, input, engine, optional pendingApproval, goalId, and goalNodeId",
     );
   }
   const positionId = assertPositionId(raw.positionId);
@@ -82,6 +88,10 @@ function parsePostBody(raw: unknown): TurnPostBody {
       `engine must be ${turnEngines.join(" or ")}`,
     );
   }
+  if (raw.goalId !== undefined) assertGoalId(raw.goalId);
+  if (raw.goalNodeId !== undefined && (typeof raw.goalNodeId !== "string" || raw.goalId === undefined)) {
+    throw new OrgApiError(errorCodes.goal_request_invalid, 400, "goalNodeId requires goalId");
+  }
   return {
     positionId,
     input: raw.input,
@@ -89,6 +99,8 @@ function parsePostBody(raw: unknown): TurnPostBody {
     ...(raw.pendingApproval !== undefined
       ? { pendingApproval: assertPendingApproval(raw.pendingApproval) }
       : {}),
+    ...(raw.goalId !== undefined ? { goalId: raw.goalId as string } : {}),
+    ...(raw.goalNodeId !== undefined ? { goalNodeId: raw.goalNodeId as string } : {}),
   };
 }
 
@@ -114,12 +126,17 @@ export interface GroupEventAttribution {
   turnId: string;
   positionId: string;
   engine: TurnEngine;
+  goalId?: string;
+  goalParentNodeId?: string;
+  goalNodeId?: string;
 }
 
-interface PersonalEventAttribution { turnId: string; positionId: string; engine: TurnEngine; sessionId?: string; conversationRef?: string }
+interface PersonalEventAttribution { turnId: string; positionId: string; engine: TurnEngine; sessionId?: string; conversationRef?: string; goalId?: string; goalNodeId?: string }
 
 function groupTag(event: EngineEvent, group?: GroupEventAttribution | PersonalEventAttribution): EngineEvent | (EngineEvent & (GroupEventAttribution | PersonalEventAttribution)) {
-  return group === undefined ? event : { ...event, ...group };
+  if (group === undefined) return event;
+  const { goalParentNodeId: _goalParentNodeId, ...publicAttribution } = group as GroupEventAttribution & PersonalEventAttribution;
+  return { ...event, ...publicAttribution };
 }
 
 function eventType(event: EngineEvent): SseEventType {
@@ -170,6 +187,8 @@ export async function executeTurn(
   assertTurnWorkspace(ctx, workspace);
   const turnId = group !== undefined ? group.turnId : crypto.randomUUID();
   const reservation = ctx.runningTurns.reserve(workspace.dir, body.positionId, turnId);
+  let goalNode: Awaited<ReturnType<ControlPlaneContext["goalStore"]["startTurn"]>> | undefined;
+  let goalFinalized = false;
   try {
     // Group spawns carry a pre-assigned turnId so the 202 spawn list and the
     // executed envelope share one identity; personal turns keep server-random.
@@ -179,10 +198,25 @@ export async function executeTurn(
     // the sessionId, bare personal turns stay v1 byte-exact.
     const conversationRef =
       group !== undefined ? group.groupRef : session !== undefined ? session.sessionId : undefined;
-    const attribution = { workspacePath: workspace.dir, ...(group ?? {
+    let attribution = { workspacePath: workspace.dir, ...(group ?? {
       turnId, positionId: body.positionId, engine: body.engine,
       ...(session !== undefined ? { sessionId: session.sessionId, conversationRef: session.sessionId } : {}),
+      ...(body.goalId !== undefined ? { goalId: body.goalId } : {}),
     }) };
+    if (body.goalId !== undefined) {
+      await ctx.goalStore.assertExists(workspace.dir, assertGoalId(body.goalId));
+      goalNode = await ctx.goalStore.startTurn(workspace.dir, {
+        goalId: body.goalId,
+        turnId,
+        label: body.input.trim().replace(/\s+/g, " ").slice(0, 240),
+        positionId: body.positionId,
+        engine: body.engine,
+        ...(body.goalNodeId !== undefined ? { parentNodeId: body.goalNodeId } : {}),
+        ...(session !== undefined ? { sessionId: session.sessionId } : {}),
+        ...(conversationRef !== undefined ? { conversationRef } : {}),
+      });
+      attribution = { ...attribution, goalId: body.goalId, goalNodeId: goalNode.nodeId };
+    }
     let history: ThreadContextSource[] = [];
     let omittedTurnCount = 0;
     let historyTruncated = false;
@@ -275,6 +309,8 @@ export async function executeTurn(
       // dual-write during the #63 clearing window so rollback never loses links.
       ...(group !== undefined ? { groupRef: group.groupRef } : {}),
       ...(conversationRef !== undefined ? { conversationRef } : {}),
+      ...(body.goalId !== undefined ? { goalId: body.goalId } : {}),
+      ...(goalNode !== undefined ? { goalNodeId: goalNode.nodeId } : {}),
     };
     const running = session === undefined
       ? await ctx.turnStore.begin(beginInput)
@@ -365,6 +401,12 @@ export async function executeTurn(
     }
     if (session === undefined) await ctx.turnStore.finish(workspace.dir, record);
     else await ctx.turnStore.finishSession(workspace.dir, session.sessionId, record);
+    if (goalNode !== undefined) {
+      const goalStatus = record.status === "completed" ? "completed" : record.status === "failed" ? "failed" : "indeterminate";
+      await ctx.goalStore.finishTurn(workspace.dir, body.goalId!, goalNode.nodeId, goalStatus);
+      goalFinalized = true;
+      ctx.bus.publish("goal.updated", { goalId: body.goalId, nodeId: goalNode.nodeId, status: goalStatus });
+    }
     if (session !== undefined && record.status === "completed") {
       // The durable turn is authoritative. Export persistence/adapter failure is
       // intentionally isolated and will be retried by workspace-open recovery.
@@ -389,6 +431,11 @@ export async function executeTurn(
     }
     sendJson(res, 200, record);
     return record;
+  } catch (error) {
+    if (goalNode !== undefined && !goalFinalized) {
+      await ctx.goalStore.finishTurn(workspace.dir, body.goalId!, goalNode.nodeId, "indeterminate").catch(() => undefined);
+    }
+    throw error;
   } finally {
     reservation.release();
   }

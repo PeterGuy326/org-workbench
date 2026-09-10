@@ -1,6 +1,7 @@
 // S2 group-chat IPC validators (#52, DS-34-001 rev-1 §1.2). Main-process
 // fail-closed boundary mirroring the route shapes in routes/groups.ts.
 const { isPositionId } = require("@roleweave/shared/position-id");
+const { validateGoalId } = require("./goal-ipc.cjs");
 
 const CONVERSATION_REF = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TURN_ENGINES = new Set(["qoder", "claude-code", "claude-local"]);
@@ -57,9 +58,13 @@ function validateGroupAddMemberRequest(value) {
 }
 
 function validateGroupTurnRequest(value) {
+  const baseKeys = value !== null && typeof value === "object" && !Array.isArray(value)
+    ? Object.keys(value).sort().filter((key) => key !== "goalId" && key !== "goalNodeId").join(",")
+    : "";
   if (
     value === null || typeof value !== "object" || Array.isArray(value) ||
-    !["conversationRef,engine,input,mentions", "conversationRef,engine,input,mentions,mode"].includes(Object.keys(value).sort().join(","))
+    !["conversationRef,engine,input,mentions", "conversationRef,engine,input,mentions,mode"].includes(baseKeys) ||
+    Object.keys(value).some((key) => !["conversationRef", "engine", "input", "mentions", "mode", "goalId", "goalNodeId"].includes(key))
   ) {
     return { ok: false, response: invalid("group_request_invalid", "group turn accepts conversationRef, input, engine, mentions and optional mode") };
   }
@@ -76,6 +81,12 @@ function validateGroupTurnRequest(value) {
   if (typeof value.engine !== "string" || !TURN_ENGINES.has(value.engine)) {
     return { ok: false, response: invalid("turn_engine_unsupported", "engine must be qoder, claude-code, or claude-local") };
   }
+  if (value.goalId !== undefined && !validateGoalId(value.goalId)) {
+    return { ok: false, response: invalid("goal_request_invalid", "goalId is invalid") };
+  }
+  if (value.goalNodeId !== undefined && (!validateGoalId(value.goalNodeId) || value.goalId === undefined)) {
+    return { ok: false, response: invalid("goal_request_invalid", "goalNodeId requires a valid goalId") };
+  }
   if (
     !Array.isArray(value.mentions) || value.mentions.length === 0 ||
     value.mentions.some((mention) => !isPositionId(mention)) ||
@@ -89,7 +100,7 @@ function validateGroupTurnRequest(value) {
   return {
     ok: true,
     conversationRef: value.conversationRef,
-    request: { input: value.input, engine: value.engine, mentions: value.mentions, ...(value.mode !== undefined ? { mode: value.mode } : {}) },
+    request: { input: value.input, engine: value.engine, mentions: value.mentions, ...(value.mode !== undefined ? { mode: value.mode } : {}), ...(value.goalId !== undefined ? { goalId: value.goalId } : {}), ...(value.goalNodeId !== undefined ? { goalNodeId: value.goalNodeId } : {}) },
   };
 }
 

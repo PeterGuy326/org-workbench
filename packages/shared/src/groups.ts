@@ -53,6 +53,9 @@ export interface GroupMessage {
   spawns?: GroupSpawn[];
   /** Host chosen for these persisted spawn identities. */
   engine?: TurnEngine;
+  /** Additive Goal spine binding for this accepted user message. */
+  goalId?: string;
+  goalNodeId?: string;
   createdAt: string;
 }
 

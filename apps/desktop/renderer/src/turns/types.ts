@@ -85,4 +85,7 @@ export interface CreateTurnRequest {
   retryOf?: string;
   /** Operator verdict for a resume turn (#187 Option 1 terminal-and-resume). */
   pendingApproval?: TurnPendingApprovalInput;
+  /** User-owned Goal spine selected for this execution. */
+  goalId?: string;
+  goalNodeId?: string;
 }

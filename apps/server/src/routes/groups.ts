@@ -24,6 +24,7 @@ import type { ControlPlaneContext } from "../context.js";
 import { readJsonBody, sendJson } from "../http.js";
 import { MAX_GROUP_MEMBERS, MAX_GROUP_INPUT_BYTES, assertConversationRef } from "../groups/store.js";
 import { assertPositionExists, assertTurnWorkspace, executeTurn, type GroupEventAttribution } from "./turns.js";
+import { assertGoalId } from "../goals/store.js";
 import { createTurnEnvelope } from "../turns/envelope.js";
 import { compactThreadContextHandoff, type SupplementalContext } from "../turns/thread-context.js";
 import { compareRfc3339Instants, compareCodeUnitOrdinal } from "../turns/store.js";
@@ -76,12 +77,12 @@ function parseAddMember(raw: unknown): string {
   return raw.positionId;
 }
 
-function parseGroupTurn(raw: unknown): { input: string; engine: TurnEngine; mentions: string[]; mode: GroupExecutionMode } {
-  if (!isRecord(raw) || (!exactKeys(raw, ["input", "engine", "mentions"]) && !exactKeys(raw, ["input", "engine", "mentions", "mode"]))) {
+function parseGroupTurn(raw: unknown): { input: string; engine: TurnEngine; mentions: string[]; mode: GroupExecutionMode; goalId?: string; goalNodeId?: string } {
+  if (!isRecord(raw) || !Object.hasOwn(raw, "input") || !Object.hasOwn(raw, "engine") || !Object.hasOwn(raw, "mentions") || Object.keys(raw).some((key) => !["input", "engine", "mentions", "mode", "goalId", "goalNodeId"].includes(key))) {
     throw new OrgApiError(
       errorCodes.group_request_invalid,
       400,
-      "group turn accepts input, engine, mentions, and optional mode",
+      "group turn accepts input, engine, mentions, optional mode, goalId, and goalNodeId",
     );
   }
   if (
@@ -115,7 +116,11 @@ function parseGroupTurn(raw: unknown): { input: string; engine: TurnEngine; ment
   if (raw.mode !== undefined && raw.mode !== "parallel" && raw.mode !== "relay") {
     throw new OrgApiError(errorCodes.group_request_invalid, 400, "mode must be parallel or relay");
   }
-  return { input: raw.input, engine: raw.engine as TurnEngine, mentions: raw.mentions as string[], mode: raw.mode ?? "parallel" };
+  if (raw.goalId !== undefined) assertGoalId(raw.goalId);
+  if (raw.goalNodeId !== undefined && (typeof raw.goalNodeId !== "string" || raw.goalId === undefined)) {
+    throw new OrgApiError(errorCodes.goal_request_invalid, 400, "goalNodeId requires goalId");
+  }
+  return { input: raw.input, engine: raw.engine as TurnEngine, mentions: raw.mentions as string[], mode: raw.mode ?? "parallel", ...(raw.goalId !== undefined ? { goalId: raw.goalId as string } : {}), ...(raw.goalNodeId !== undefined ? { goalNodeId: raw.goalNodeId as string } : {}) };
 }
 
 export async function handleGroupCreate(
@@ -197,6 +202,7 @@ export async function handleGroupTurnPost(
   assertTurnWorkspace(ctx, workspace);
   const ref = assertConversationRef(conversationRef);
   const group = await ctx.groupStore.get(workspace.dir, ref);
+  if (body.goalId !== undefined) await ctx.goalStore.assertExists(workspace.dir, body.goalId);
   assertTurnWorkspace(ctx, workspace);
   for (const mention of body.mentions) {
     if (!group.members.includes(mention)) {
@@ -226,6 +232,8 @@ export async function handleGroupTurnPost(
       mode: body.mode,
       spawns,
       engine: body.engine,
+      ...(body.goalId !== undefined ? { goalId: body.goalId } : {}),
+      ...(body.goalNodeId !== undefined ? { goalNodeId: body.goalNodeId } : {}),
       createdAt: now,
     });
     sendJson(res, 202, { conversationRef: ref, messageId, spawns, mode: body.mode });
@@ -242,8 +250,10 @@ export async function handleGroupTurnPost(
         turnId: spawn.turnId,
         positionId: spawn.positionId,
         engine: body.engine,
+        ...(body.goalId !== undefined ? { goalId: body.goalId, ...(body.goalNodeId !== undefined ? { goalParentNodeId: body.goalNodeId } : {}) } : {}),
       };
-      ctx.bus.publish("group.turn.spawned", { ...attribution, workspacePath: workspace.dir });
+      const { goalParentNodeId: _goalParentNodeId, ...publicAttribution } = attribution;
+      ctx.bus.publish("group.turn.spawned", { ...publicAttribution, workspacePath: workspace.dir });
       try {
         // A relay may outlive workspace navigation. Never dispatch a delayed
         // step into whichever project happens to be open later.
@@ -268,6 +278,7 @@ export async function handleGroupTurnPost(
         await persistUnexecutedTurn(ctx, workspace.dir, body.input, {
           groupRef: ref, messageId: message.messageId, turnId: spawn.turnId,
           positionId: spawn.positionId, engine: body.engine,
+          ...(body.goalId !== undefined ? { goalId: body.goalId, ...(body.goalNodeId !== undefined ? { goalParentNodeId: body.goalNodeId } : {}) } : {}),
         }, "group_relay_blocked", message.createdAt);
         continue;
       }
@@ -281,6 +292,7 @@ export async function handleGroupTurnPost(
     for (const spawn of spawns) {
       await persistUnexecutedTurn(ctx, workspace.dir, body.input, {
         groupRef: ref, messageId: message.messageId, ...spawn, engine: body.engine,
+        ...(body.goalId !== undefined ? { goalId: body.goalId, ...(body.goalNodeId !== undefined ? { goalParentNodeId: body.goalNodeId } : {}) } : {}),
       }, "group_spawn_failed", message.createdAt);
     }
   }).finally(releaseDispatch);
@@ -306,10 +318,25 @@ async function persistUnexecutedTurn(
         workspaceRef: workspace, positionId: attribution.positionId, turnId: attribution.turnId,
         message: input, conversationRef: attribution.groupRef,
       });
+      let goalNodeId = existing?.goalNodeId ?? attribution.goalNodeId;
+      if (attribution.goalId !== undefined && goalNodeId === undefined) {
+        const goalNode = await ctx.goalStore.startTurn(workspace, {
+          goalId: attribution.goalId,
+          turnId: attribution.turnId,
+          label: input.trim().replace(/\s+/g, " ").slice(0, 240),
+          positionId: attribution.positionId,
+          engine: attribution.engine,
+          ...(attribution.goalParentNodeId !== undefined ? { parentNodeId: attribution.goalParentNodeId } : {}),
+          conversationRef: attribution.groupRef,
+        });
+        goalNodeId = goalNode.nodeId;
+      }
       const running = existing ?? await ctx.turnStore.begin({
         workspace, positionId: attribution.positionId, turnId: attribution.turnId,
         engine: attribution.engine, message: input, envelopeDigest: envelope.envelopeDigest,
         now: createdAt, groupRef: attribution.groupRef, conversationRef: attribution.groupRef,
+        ...(attribution.goalId !== undefined ? { goalId: attribution.goalId } : {}),
+        ...(goalNodeId !== undefined ? { goalNodeId } : {}),
       });
       record = {
         ...running, status: "indeterminate",
@@ -328,13 +355,18 @@ async function persistUnexecutedTurn(
         },
       };
       await ctx.turnStore.finish(workspace, record);
+      if (attribution.goalId !== undefined && goalNodeId !== undefined) {
+        await ctx.goalStore.finishTurn(workspace, attribution.goalId, goalNodeId, "indeterminate");
+        ctx.bus.publish("goal.updated", { goalId: attribution.goalId, nodeId: goalNodeId, status: "indeterminate" });
+      }
     } catch {
       // A storage failure cannot be made durable; preserve a scoped live error
       // without pretending an engine ran or a terminal record was saved.
       record = null;
     }
+    const { goalParentNodeId: _goalParentNodeId, ...publicAttribution } = attribution;
     ctx.bus.publish("turn.indeterminate", {
-      ...attribution, workspacePath: workspace, conversationRef: attribution.groupRef,
+      ...publicAttribution, workspacePath: workspace, conversationRef: attribution.groupRef,
       code, envelopeDigest: record?.envelopeDigest ?? "",
     });
     return record;
