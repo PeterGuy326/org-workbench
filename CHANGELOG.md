@@ -38,6 +38,7 @@
 
 ### Changed
 
+- #246：设置新增主题颜色面板——内置 RoleWeave 默认与 Ant Design 经典两个预设，语义颜色按键取色微调，浅色/深色分开保存，可一键恢复默认；Ant Design 的颜色 token 改为从生效主题统一派生，不再与 `--ui-*` CSS 变量人工同步。存储记录读取时白名单校验，坏数据降级为默认主题。Agent 生成配色为后续切片。
 - #206：RoleWeave 内置引擎新增 Codex 服务凭据与本地登录两种 Agent Host；本地登录不依赖服务 API key。
 - #236：Agent Host 下方显示本次回合将使用的模型（仅对存在模型旋钮的 Host 展示，由 `/health` 新增的可选 `modelPinnable` 下发，客户端不自带引擎清单）。`/health` 的 Host 状态新增可选 `model`（取自 `OPENAI_MODEL`）；未指定时如实显示"由 Host 自行决定"而不推断名字——Codex CLI 不向调用方报告它选中的模型。Codex 回合一律带 `--ignore-user-config`，`~/.codex/config.toml` 的 `model` 不生效。`OPENAI_MODEL` 非法时两个 Codex Host 在前置检查即 fail closed 并给出可执行提示，不再等到 spawn 前失败。
 - 以 RoleWeave 标识的紫蓝色建立 light / dark 双主题，逐组件统一组织、会话、群聊、招聘、文档、网盘、报表、审批和设置；简化嵌套卡片与装饰标签，改善正文、长路径、超限数值及暗色表单的可读性，保留业务行为。

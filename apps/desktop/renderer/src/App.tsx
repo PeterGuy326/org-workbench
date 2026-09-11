@@ -29,6 +29,7 @@ import type {
 } from "@roleweave/shared";
 import { BrainCircuit, Check, ChevronDown, Cog, FileChartColumn, FolderOpen, FolderPlus, Network, Plus, ShieldAlert, Undo2, UsersRound } from "lucide-react";
 import { useThemeMode } from "./theme-toggle";
+import { antdColorTokensForPalette, effectivePalette, useThemeCustomization } from "./theme-customization";
 import { PrefsMenu } from "./prefs-menu";
 import { persistLocale, seedLocale } from "./locale-mode";
 import {
@@ -175,6 +176,20 @@ function AppInner({
   const [groupDraftSeed, setGroupDraftSeed] = useState<{ members: string[]; nonce: number; scope: symbol } | null>(null);
   /** 亮/暗跟随 <html data-theme>，antd cssinjs 与 --ui-* skin 同步切换。 */
   const themeMode = useThemeMode();
+  /** #246：预设 + 分模式覆盖解析出的颜色同时驱动 --ui-* 变量与 antd。 */
+  const themeCustom = useThemeCustomization();
+  const antdTokens = useMemo(
+    () => ({
+      ...antdColorTokensForPalette(effectivePalette(themeCustom, themeMode)),
+      ...ANTD_GEOMETRY,
+      ...ANTD_SHADOWS[themeMode],
+    }),
+    [themeCustom, themeMode],
+  );
+  const antdAlgorithm = useMemo(
+    () => brandAlgorithm(themeMode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm, antdTokens),
+    [antdTokens, themeMode],
+  );
   /** #146：界面文案唯一入口；数据层文案不经过这里。 */
   const t = useT();
 
@@ -1016,11 +1031,11 @@ function AppInner({
       locale={locale === "en" ? enUS : zhCN}
       button={{ autoInsertSpace: false }}
       theme={{
-        algorithm: ANTD_ALGORITHM[themeMode],
+        algorithm: antdAlgorithm,
         token: {
-          // RoleWeave brand tokens stay synchronized in both themes,
+          // #246: color tokens derive from the active theme customization,
           // including portaled Antd menus, notifications and drawers.
-          ...ANTD_SEED[themeMode],
+          ...antdTokens,
           // Both themes use the same readable typography and control geometry.
           fontSize: 13,
           borderRadius: 8,
@@ -1458,152 +1473,36 @@ function WindowControls() {
   );
 }
 
-/** antd seed tokens per theme — values mirror antd-skin.css exactly so the
- * cssinjs layer and the CSS custom properties never disagree. */
-const ANTD_SEED = {
-  "light": {
-    "colorPrimary": "#3e63dd",
-    "colorPrimaryHover": "#3153c4",
-    "colorPrimaryActive": "#3153c4",
-    "colorPrimaryBg": "#edf1ff",
-    "colorPrimaryBgHover": "#edf1ff",
-    "colorPrimaryBorder": "#e2e5ed",
-    "colorPrimaryBorderHover": "#c7cedb",
-    "colorSuccess": "#2e7052",
-    "colorSuccessHover": "#24573f",
-    "colorSuccessActive": "#24573f",
-    "colorSuccessBg": "#edf7f1",
-    "colorSuccessBgHover": "#edf7f1",
-    "colorSuccessBorder": "#e2e5ed",
-    "colorSuccessBorderHover": "#c7cedb",
-    "colorWarning": "#8a5a12",
-    "colorWarningHover": "#75480b",
-    "colorWarningActive": "#75480b",
-    "colorWarningBg": "#fff5e4",
-    "colorWarningBgHover": "#fff5e4",
-    "colorWarningBorder": "#e2e5ed",
-    "colorWarningBorderHover": "#c7cedb",
-    "colorError": "#b83d3d",
-    "colorErrorHover": "#a22f36",
-    "colorErrorActive": "#a22f36",
-    "colorErrorBg": "#fff0f0",
-    "colorErrorBgHover": "#fff0f0",
-    "colorErrorBorder": "#e2e5ed",
-    "colorErrorBorderHover": "#c7cedb",
-    "colorInfo": "#3e63dd",
-    "colorInfoHover": "#3153c4",
-    "colorInfoActive": "#3153c4",
-    "colorInfoBg": "#edf1ff",
-    "colorInfoBgHover": "#edf1ff",
-    "colorInfoBorder": "#e2e5ed",
-    "colorInfoBorderHover": "#c7cedb",
-    "colorErrorBgFilledHover": "#fff0f0",
-    "colorErrorBgActive": "#fff0f0",
-    "colorLink": "#3e63dd",
-    "colorLinkHover": "#3153c4",
-    "colorLinkActive": "#3153c4",
-    "colorBorder": "#e2e5ed",
-    "colorBorderSecondary": "#e2e5ed",
-    "colorBgBase": "#ffffff",
-    "colorBgContainer": "#ffffff",
-    "colorBgElevated": "#ffffff",
-    "colorBgLayout": "#f7f8fb",
-    "colorFillAlter": "#f4f5f8",
-    "controlItemBgHover": "#e8ebf2",
-    "controlItemBgActive": "#f3edfc",
-    "controlItemBgActiveHover": "#f3edfc",
-    "colorText": "#242630",
-    "colorTextSecondary": "#596172",
-    "colorTextTertiary": "#606a7b",
-    "colorTextPlaceholder": "#606a7b",
-    "colorTextDisabled": "#606a7b",
-    "colorBgContainerDisabled": "#f4f5f8",
-    "colorTextLightSolid": "#ffffff",
-    "borderRadiusSM": 6,
-    "borderRadiusLG": 12,
-    "borderRadiusOuter": 16,
-    "boxShadow": "0 4px 16px rgba(20, 21, 27, 0.1)",
-    "boxShadowSecondary": "0 16px 48px rgba(20, 21, 27, 0.14)"
-  },
-  "dark": {
-    "colorPrimary": "#86a0ff",
-    "colorPrimaryHover": "#a0b4ff",
-    "colorPrimaryActive": "#a0b4ff",
-    "colorPrimaryBg": "#252e49",
-    "colorPrimaryBgHover": "#252e49",
-    "colorPrimaryBorder": "#343844",
-    "colorPrimaryBorderHover": "#4b5262",
-    "colorSuccess": "#84c7a3",
-    "colorSuccessHover": "#a2dabb",
-    "colorSuccessActive": "#a2dabb",
-    "colorSuccessBg": "#20372c",
-    "colorSuccessBgHover": "#20372c",
-    "colorSuccessBorder": "#343844",
-    "colorSuccessBorderHover": "#4b5262",
-    "colorWarning": "#ddb35d",
-    "colorWarningHover": "#efcc86",
-    "colorWarningActive": "#efcc86",
-    "colorWarningBg": "#352e20",
-    "colorWarningBgHover": "#352e20",
-    "colorWarningBorder": "#343844",
-    "colorWarningBorderHover": "#4b5262",
-    "colorError": "#ef9699",
-    "colorErrorHover": "#ffb1b4",
-    "colorErrorActive": "#ffb1b4",
-    "colorErrorBg": "#3a242b",
-    "colorErrorBgHover": "#3a242b",
-    "colorErrorBorder": "#343844",
-    "colorErrorBorderHover": "#4b5262",
-    "colorInfo": "#86a0ff",
-    "colorInfoHover": "#a0b4ff",
-    "colorInfoActive": "#a0b4ff",
-    "colorInfoBg": "#252e49",
-    "colorInfoBgHover": "#252e49",
-    "colorInfoBorder": "#343844",
-    "colorInfoBorderHover": "#4b5262",
-    "colorErrorBgFilledHover": "#3a242b",
-    "colorErrorBgActive": "#3a242b",
-    "colorLink": "#86a0ff",
-    "colorLinkHover": "#a0b4ff",
-    "colorLinkActive": "#a0b4ff",
-    "colorBorder": "#343844",
-    "colorBorderSecondary": "#343844",
-    "colorBgBase": "#1c1e25",
-    "colorBgContainer": "#1c1e25",
-    "colorBgElevated": "#252831",
-    "colorBgLayout": "#14151b",
-    "colorFillAlter": "#171920",
-    "controlItemBgHover": "#252831",
-    "controlItemBgActive": "#30233f",
-    "controlItemBgActiveHover": "#30233f",
-    "colorText": "#e5e7ed",
-    "colorTextSecondary": "#b1b7c5",
-    "colorTextTertiary": "#969eaf",
-    "colorTextPlaceholder": "#969eaf",
-    "colorTextDisabled": "#969eaf",
-    "colorBgContainerDisabled": "#171920",
-    "colorTextLightSolid": "#14151b",
-    "borderRadiusSM": 6,
-    "borderRadiusLG": 12,
-    "borderRadiusOuter": 16,
-    "boxShadow": "0 4px 20px rgba(0, 0, 0, 0.35)",
-    "boxShadowSecondary": "0 16px 48px rgba(0, 0, 0, 0.4)"
-  }
+/** Geometry and shadow tokens shared by both themes (#246). Color tokens are
+ * no longer listed here: they are derived from the effective semantic palette
+ * at render time, so the cssinjs layer and the `--ui-*` custom properties can
+ * never disagree. The renderer tests pin that the derivation applied to the
+ * built-in `roleweave` preset reproduces the old hand-synchronized seed. */
+const ANTD_GEOMETRY = {
+  borderRadiusSM: 6,
+  borderRadiusLG: 12,
+  borderRadiusOuter: 16,
 } as const;
 
-// Antd's dark algorithm derives a new primary color from its seed. Restore our
-// explicit palette after derivation so native controls and CSS share colors.
+const ANTD_SHADOWS = {
+  light: {
+    boxShadow: "0 4px 16px rgba(20, 21, 27, 0.1)",
+    boxShadowSecondary: "0 16px 48px rgba(20, 21, 27, 0.14)",
+  },
+  dark: {
+    boxShadow: "0 4px 20px rgba(0, 0, 0, 0.35)",
+    boxShadowSecondary: "0 16px 48px rgba(0, 0, 0, 0.4)",
+  },
+} as const;
+
+/* Antd's dark algorithm derives a new primary color from its seed. Restore the
+ * explicit palette after derivation so native controls and CSS share colors. */
 function brandAlgorithm(
   algorithm: typeof theme.defaultAlgorithm,
-  palette: typeof ANTD_SEED[keyof typeof ANTD_SEED],
+  palette: Record<string, string | number>,
 ): typeof theme.defaultAlgorithm {
   return (seed) => ({ ...algorithm(seed), ...palette });
 }
-
-const ANTD_ALGORITHM = {
-  light: brandAlgorithm(theme.defaultAlgorithm, ANTD_SEED.light),
-  dark: brandAlgorithm(theme.darkAlgorithm, ANTD_SEED.dark),
-};
 
 function Breadcrumbs({
   workspace,

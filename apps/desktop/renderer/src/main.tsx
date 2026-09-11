@@ -19,6 +19,7 @@ import "./roleweave-conversation.css";
 import "./roleweave-data.css";
 import { App } from "./App";
 import { initThemeMode } from "./theme-mode";
+import { initThemeCustomization } from "./theme-customization";
 
 export const PACKAGED_SMOKE_QUERY_KEY = "orgWorkbenchPackagedSmoke";
 const PACKAGED_SMOKE_NONCE = /^[a-f0-9]{64}$/;
@@ -65,6 +66,12 @@ if (!root) throw new Error("renderer root element missing");
 // OS-preference follow, which lives as long as the window does, so it is
 // deliberately dropped here.
 initThemeMode();
+
+// Semantic color customization seed (#246): applies any stored preset or
+// overrides as inline `--ui-*` variables and keeps them resolved across
+// light/dark switches. Default (no stored record) writes nothing, so the
+// stylesheet stays the only source for stock users.
+initThemeCustomization();
 
 // The antd ConfigProvider (ADR-0002 theme tokens) lives inside <App /> so the
 // test harness renders the exact same configuration as production.

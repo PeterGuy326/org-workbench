@@ -20,6 +20,7 @@ import {
   updateAffordances,
   type UpdateMessage,
 } from "./update-copy";
+import { ThemeSettings } from "./ThemeSettings";
 
 export function SettingsModule() {
   const t = useT();
@@ -171,6 +172,8 @@ export function SettingsModule() {
         </div>
 
       </section>
+
+      <ThemeSettings />
     </section>
   );
 }
