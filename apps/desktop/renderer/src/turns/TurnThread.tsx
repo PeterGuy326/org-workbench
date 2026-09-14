@@ -3,7 +3,7 @@ import { Empty } from "antd";
 import { AlertTriangle, Check, ChevronRight, LoaderCircle, RotateCcw, ShieldAlert, ShieldQuestion } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useT } from "@roleweave/ui";
-import { useEngineLabel } from "./TurnPanel";
+import { useEngineLabel } from "./engine-select";
 import { EngineIcon } from "./engine-icon";
 import type { TurnProgressKind, TurnRecord } from "./types";
 
@@ -309,7 +309,7 @@ export function TurnThread({ turns, retrying = false, emptyPrompt, canRetry, onR
                 </span>
                 <span className="owb-tc-head__eng">
                   <EngineIcon engine={turn.engine} />
-                  {engineLabel(turn.engine)}
+                  {turn.model ?? engineLabel(turn.engine)}
                 </span>
                 {isProvisional ? (
                   <span className="owb-tc-head__provisional" aria-label={t("turn.provisionalTitle")}>
