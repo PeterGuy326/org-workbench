@@ -3,7 +3,7 @@ import { Alert, Badge, Button as AntButton, ConfigProvider } from "antd";
 import { DiagnosticNotice } from "./DiagnosticNotice";
 import zhCN from "antd/locale/zh_CN";
 import enUS from "antd/locale/en_US";
-import { OwbI18nProvider, useT, type OwbLocale } from "@roleweave/ui";
+import { localizePositionCard, OwbI18nProvider, useT, type OwbLocale } from "@roleweave/ui";
 import {
   AppShell,
   DSProvider,
@@ -344,7 +344,7 @@ function AppInner({
             const response = await window.owb.position(id);
             const body = response.body as { position?: PositionCardData; agentEngine?: unknown };
             const position = response.status === 200 && body.position
-              ? normalizePositionForDisplay(body.position)
+              ? normalizePositionForDisplay(body.position, locale)
               : undefined;
             const color = position?.metadata?.color;
             const agentEngine = isTurnEngine(body.agentEngine) ? body.agentEngine : undefined;
@@ -407,7 +407,7 @@ function AppInner({
     } finally {
       setTreeLoading(false);
     }
-  }, [loadBackups, loadReports, t]);
+  }, [loadBackups, loadReports, locale, t]);
 
   const refreshOrg = useCallback((workspace: unknown, version: unknown, changes: unknown) =>
     orgRefreshes.run(workspace, version, () => refresh(onlyMovesAndReorders(changes))), [orgRefreshes, refresh]);
@@ -438,10 +438,10 @@ function AppInner({
     if (currentAvailability) setLockedAgentPositions((current) => current[id] === (body.agentLocked === true) ? current : { ...current, [id]: body.agentLocked === true });
     setCard({
       loading: false,
-      data: body?.position ? normalizePositionForDisplay(body.position) : null,
+      data: body?.position ? normalizePositionForDisplay(body.position, locale) : null,
       notFound: false,
     });
-  }, []);
+  }, [locale]);
 
   // A status check only refreshes availability. Never reload the workspace,
   // organization, sessions or drafts. Both reads commit as one scoped result.
@@ -1658,8 +1658,8 @@ function findNodeById(nodes: OrgTreeNodeV1[], id: string): OrgTreeNodeV1 | null 
  * button with an accessible name — the previous decorative dots sat under the
  * native frame and did nothing. Guarded with `?.` so the renderer still boots
  * against an older preload bridge (tests stub a partial bridge). */
-function normalizePositionForDisplay(position: PositionCardData): PositionCardData {
-  return {
+function normalizePositionForDisplay(position: PositionCardData, locale: OwbLocale): PositionCardData {
+  return localizePositionCard({
     ...position,
     name: decodeEscapedUnicode(position.name),
     description: decodeEscapedUnicode(position.description),
@@ -1671,7 +1671,7 @@ function normalizePositionForDisplay(position: PositionCardData): PositionCardDa
     metadata: Object.fromEntries(
       Object.entries(position.metadata).map(([key, value]) => [key, decodeEscapedUnicode(value)]),
     ),
-  };
+  }, locale);
 }
 
 function WindowControls() {
