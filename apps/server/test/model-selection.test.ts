@@ -56,6 +56,37 @@ test("operator can bind an imported employee to Codex before its first task", as
   }
 });
 
+test("operator can choose an imported employee model before its first task", async () => {
+  const server = await startTestServer();
+  const workspace = await copyExampleWorkspace();
+  server.ctx.config.bundledElectronEngine = true;
+  try {
+    assert.equal((await api(server.baseUrl, "/workspace/open", { method: "POST", token: server.token, body: { path: workspace } })).status, 200);
+    assert.equal(await readPositionAgentBinding(server.ctx.workspace.requireOpen(), "repo-owner"), null);
+    const card = await api(server.baseUrl, "/positions/repo-owner?engine=qoder", { token: server.token });
+    assert.equal(card.status, 200);
+    assert.equal((card.body as { modelConfig?: { selected?: string } }).modelConfig?.selected, "provider-default");
+    const select = await api(server.baseUrl, "/positions/repo-owner/model", {
+      method: "PATCH",
+      token: server.token,
+      body: { model: "efficient", engine: "qoder" },
+    });
+    assert.equal(select.status, 200);
+    assert.deepEqual(await readPositionAgentBinding(server.ctx.workspace.requireOpen(), "repo-owner"), {
+      schemaVersion: "roleweave-agent-binding.v1",
+      engine: "qoder",
+      locked: true,
+      model: "efficient",
+    });
+    const persisted = await api(server.baseUrl, "/positions/repo-owner", { token: server.token });
+    assert.equal((persisted.body as { modelConfig?: { selected?: string }; agentEngine?: string }).modelConfig?.selected, "efficient");
+    assert.equal((persisted.body as { agentEngine?: string }).agentEngine, "qoder");
+  } finally {
+    await server.close();
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("employee model selection persists, reaches the driver, and preserves the same session context", async () => {
   const seen: TurnRunRequest[] = [];
   const server = await startTestServer(undefined, { async turnRun(request) {

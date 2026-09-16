@@ -428,11 +428,15 @@ ipcMain.handle("owb:hire:create", async (_event, request) => {
 
 ipcMain.handle("owb:reports:get", async () => apiRequest("/reports"));
 
-ipcMain.handle("owb:position:get", async (_event, positionId) => {
+ipcMain.handle("owb:position:get", async (_event, positionId, engine) => {
   if (typeof positionId !== "string" || positionId.length === 0) {
     return { status: 400, body: { code: "manifest_invalid", message: "positionId required" } };
   }
-  return apiRequest(`/positions/${encodeURIComponent(positionId)}`);
+  if (engine !== undefined && (typeof engine !== "string" || !TURN_ENGINE_IDS.includes(engine))) {
+    return { status: 400, body: { code: "manifest_invalid", message: "invalid Agent engine" } };
+  }
+  const query = engine === undefined ? "" : `?engine=${encodeURIComponent(engine)}`;
+  return apiRequest(`/positions/${encodeURIComponent(positionId)}${query}`);
 });
 
 ipcMain.handle("owb:avatar:generate", async (event, request) => {
@@ -447,12 +451,17 @@ ipcMain.handle("owb:avatar:generate", async (event, request) => {
 ipcMain.handle("owb:position:model", async (event, request) => {
   if (!isTrustedWindowSender(event, mainWindow, trustedRendererUrl)) return { status: 403, body: { message: "Untrusted sender" } };
   if (!request || typeof request !== "object" || Array.isArray(request) ||
-      Object.keys(request).length !== 2 || typeof request.positionId !== "string" ||
+      (Object.keys(request).length !== 2 && Object.keys(request).length !== 3) || typeof request.positionId !== "string" ||
+      !Object.keys(request).every((key) => key === "positionId" || key === "model" || key === "engine") ||
       !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(request.positionId) ||
-      typeof request.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/.test(request.model)) {
+      typeof request.model !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/.test(request.model) ||
+      (request.engine !== undefined && (typeof request.engine !== "string" || !TURN_ENGINE_IDS.includes(request.engine)))) {
     return { status: 400, body: { message: "Invalid employee model selection" } };
   }
-  return apiRequest(`/positions/${encodeURIComponent(request.positionId)}/model`, { method: "PATCH", body: { model: request.model } });
+  return apiRequest(`/positions/${encodeURIComponent(request.positionId)}/model`, {
+    method: "PATCH",
+    body: request.engine === undefined ? { model: request.model } : { model: request.model, engine: request.engine },
+  });
 });
 
 ipcMain.handle("owb:position:agent-engine", async (event, request) => {

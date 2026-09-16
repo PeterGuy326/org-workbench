@@ -210,11 +210,20 @@ export async function readPositionAgentBinding(
   return readBindingAt(resolvePaths(workspace, positionId));
 }
 
-export async function setPositionModel(workspace: OpenWorkspace, positionId: string, model: string): Promise<void> {
+export async function setPositionModel(workspace: OpenWorkspace, positionId: string, model: string, initialEngine?: TurnEngine): Promise<void> {
   const paths = resolvePaths(workspace, positionId);
   await withBindingLock(`${path.resolve(workspace.dir)}\0${positionId}`, async () => {
     const binding = await readBindingAt(paths);
-    if (!binding) throw bindingError("An Agent must be bound before choosing its model");
+    if (!binding) {
+      if (initialEngine === undefined) throw bindingError("An Agent must be bound before choosing its model");
+      await writeBindingAt(paths, {
+        schemaVersion: AGENT_BINDING_SCHEMA_VERSION,
+        engine: initialEngine,
+        locked: true,
+        model,
+      });
+      return;
+    }
     await writeBindingAt(paths, { ...binding, model });
   });
 }

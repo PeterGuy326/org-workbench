@@ -170,6 +170,9 @@ function AppInner({
    * enforcement; this local projection lets the renderer show accurate
    * readiness and seed a legacy employee's first durable binding. */
   const [positionEngines, setPositionEngines] = useState<Record<string, TurnEngine>>({});
+  const positionEnginesRef = useRef<Record<string, TurnEngine>>({});
+  positionEnginesRef.current = positionEngines;
+  const defaultTurnEngineRef = useRef<TurnEngine>("qoder");
   const [lockedAgentPositions, setLockedAgentPositions] = useState<Record<string, boolean>>({});
   const [positionModels, setPositionModels] = useState<Record<string, EmployeeModelConfig>>({});
   const [modelStates, setModelStates] = useState<Record<string, { loading?: boolean; error?: string; notice?: string }>>({});
@@ -434,13 +437,14 @@ function AppInner({
 
   useEffect(() => { orgRefreshes.clear(); }, [orgRefreshes, workspaceInfo?.path]);
 
-  const loadPosition = useCallback(async (id: string) => {
+  const loadPosition = useCallback(async (id: string, requestedEngine?: TurnEngine) => {
     const version = selectionVersion.current;
     const read = ++positionReadVersion.current;
     setCard({ loading: true, data: null, notFound: false });
     setModelStates(current => ({ ...current, [id]: { loading: true } }));
     try {
-    const res = await window.owb.position(id);
+    const engine = requestedEngine ?? positionEnginesRef.current[id] ?? defaultTurnEngineRef.current;
+    const res = await window.owb.position(id, engine);
     if (version !== selectionVersion.current || selectedIdRef.current !== id) return;
     const body = res.body as { position?: PositionCardData; code?: string; agentEngine?: unknown; agentLocked?: unknown; modelConfig?: EmployeeModelConfig };
     const currentAvailability = read === positionReadVersion.current;
@@ -508,7 +512,7 @@ function AppInner({
     try {
       const [status, positionResponse] = await Promise.all([
         window.owb.status(),
-        id ? window.owb.position(id) : undefined,
+        id ? window.owb.position(id, positionEnginesRef.current[id] ?? defaultTurnEngineRef.current) : undefined,
       ]);
       if (!isCurrentRead()) return;
       if (!status.running || status.health?.status !== "ok" || (id && positionResponse?.status !== 200)) throw new Error("Availability check failed");
@@ -837,7 +841,11 @@ function AppInner({
     setModelSavingIds(current => ({ ...current, [operationKey]: true }));
     setModelStates(current => ({ ...current, [id]: {} }));
     try {
-      const response = await window.owb.setPositionModel({ positionId: id, model });
+      const response = await window.owb.setPositionModel({
+        positionId: id,
+        model,
+        engine: positionEnginesRef.current[id] ?? defaultTurnEngineRef.current,
+      });
       if (workspacePathRef.current !== workspace || latestGroupWorkspaceScope.current !== scope) return;
       if (response.status !== 200) { setModelStates(current => ({ ...current, [id]: { error: t("model.saveFailed") } })); return; }
       setPositionModels((current) => ({ ...current, [id]: response.body }));
@@ -1220,6 +1228,7 @@ function AppInner({
    * legacy employees this supplies the first request used by the server to
    * create their one-time binding. */
   const defaultTurnEngine = resolveAgentEngine(defaultAgentHost(engineAvailability), engineAvailability);
+  defaultTurnEngineRef.current = defaultTurnEngine;
   const engineForPosition = useCallback(
     (positionId: string): TurnEngine => positionEngines[positionId] ?? defaultTurnEngine,
     [defaultTurnEngine, positionEngines],

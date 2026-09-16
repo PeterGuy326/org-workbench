@@ -74,7 +74,7 @@ export interface OwbBridge {
     set(key: import("./settings/credential-settings").CredentialKey, value: string): Promise<import("./settings/credential-settings").SettingsResult>;
     clear(key: import("./settings/credential-settings").CredentialKey): Promise<import("./settings/credential-settings").SettingsResult>;
   };
-  setPositionModel?(request: { positionId: string; model: string }): Promise<OwbApiResponse<import("@roleweave/shared").EmployeeModelConfig>>;
+  setPositionModel?(request: { positionId: string; model: string; engine?: TurnEngine }): Promise<OwbApiResponse<import("@roleweave/shared").EmployeeModelConfig>>;
   setPositionAgentEngine?(request: { positionId: string; engine: TurnEngine }): Promise<OwbApiResponse<{ agentEngine: TurnEngine; agentLocked: true; modelConfig: import("@roleweave/shared").EmployeeModelConfig }>>;
   status(): Promise<OwbStatusResponse>;
   stopControlPlane(): Promise<{ ok: boolean; state: "stopped"; forced: boolean; exitCode: number | null; signalCode: string | null }>;
@@ -89,7 +89,7 @@ export interface OwbBridge {
   hire(request: HirePositionRequest): Promise<OwbApiResponse<HireResult>>;
   generateAvatar(request: AvatarGenerateRequest): Promise<OwbApiResponse<AvatarGenerateResponse>>;
   reports(): Promise<OwbApiResponse<ReportsResponse>>;
-  position(positionId: string): Promise<OwbApiResponse>;
+  position(positionId: string, engine?: TurnEngine): Promise<OwbApiResponse>;
   positionDocs(positionId: string): Promise<OwbApiResponse<DocsFileListResponse>>;
   positionDocFile(positionId: string, filePath: string): Promise<OwbApiResponse<DocsFileResponse>>;
   createPositionDoc(request: DocsCreateRequest): Promise<OwbApiResponse<DocsCreateResponse>>;

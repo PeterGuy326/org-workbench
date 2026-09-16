@@ -308,6 +308,34 @@ describe("App runtime bridge", () => {
     expect(screen.queryByRole("switch", { name: "启用会话上下文" })).not.toBeInTheDocument();
   });
 
+  it("shows the model picker for an unbound employee and saves the choice with its effective Agent", async () => {
+    const modelConfig = {
+      selected: "provider-default",
+      recommended: "provider-default",
+      editable: true,
+      source: "default" as const,
+      options: [
+        { id: "provider-default", name: "Agent default", tier: "default" as const },
+        { id: "performance", name: "Performance", tier: "balanced" as const },
+      ],
+    };
+    const positionRead = vi.fn().mockResolvedValue({ status: 200, body: { position, modelConfig } });
+    const setPositionModel = vi.fn().mockResolvedValue({ status: 200, body: { ...modelConfig, selected: "performance" } });
+    openedBridge({ position: positionRead, setPositionModel });
+
+    render(<App />);
+    await selectRepoOwner();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "员工模型" })).toBeEnabled());
+    pickSelectOption("员工模型", "Performance");
+
+    await waitFor(() => expect(setPositionModel).toHaveBeenCalledWith({
+      positionId: "repo-owner",
+      model: "performance",
+      engine: "qoder",
+    }));
+    expect(positionRead.mock.calls.some(([id, engine]) => id === "repo-owner" && engine === "qoder")).toBe(true);
+  });
+
   it.each(["qoder", "claude-code", "workbuddy"] as const)("uses the persisted %s binding across remounts instead of a stale global preference", async (agentEngine) => {
     window.localStorage.setItem("owb-turn-engine", "codex-local");
     try {
