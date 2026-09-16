@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld("owb", {
   hire: (request) => ipcRenderer.invoke("owb:hire:create", request),
   generateAvatar: (request) => ipcRenderer.invoke("owb:avatar:generate", request),
   reports: () => ipcRenderer.invoke("owb:reports:get"),
-  position: (positionId) => ipcRenderer.invoke("owb:position:get", positionId),
+  position: (positionId, engine) => ipcRenderer.invoke("owb:position:get", positionId, engine),
   setPositionAgentEngine: (request) => ipcRenderer.invoke("owb:position:agent-engine", request),
   updatePositionProfile: (request) => ipcRenderer.invoke("owb:position:profile", request),
   setPositionModel: (request) => ipcRenderer.invoke("owb:position:model", request),

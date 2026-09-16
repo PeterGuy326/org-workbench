@@ -339,7 +339,8 @@ async function dispatch(
       } catch {
         throw new OrgApiError(errorCodes.not_found, 404, "malformed position id");
       }
-      await handlePositionGet(ctx, res, positionId);
+      const requestedEngine = url.searchParams.get("engine");
+      await handlePositionGet(ctx, res, positionId, requestedEngine === null ? undefined : requestedEngine as import("@roleweave/shared").TurnEngine);
       return;
     }
 

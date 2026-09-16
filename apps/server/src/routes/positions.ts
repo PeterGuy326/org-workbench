@@ -54,6 +54,7 @@ export async function handlePositionGet(
   ctx: ControlPlaneContext,
   res: ServerResponse,
   positionId: string,
+  requestedEngine?: TurnEngine,
 ): Promise<void> {
   const ws = ctx.workspace.requireOpen();
   const role = ws.organization.roles.find((entry) => entry.id === positionId);
@@ -67,9 +68,13 @@ export async function handlePositionGet(
   // only when it already exists; first-use migration remains transactional
   // with the actual turn so merely selecting someone cannot change them.
   const agentBinding = await readPositionAgentBinding(ws, role.id);
+  if (requestedEngine !== undefined && !turnEngines.includes(requestedEngine)) {
+    throw new OrgApiError(errorCodes.turn_request_invalid, 400, "Unsupported Agent engine");
+  }
+  const modelEngine = agentBinding?.engine ?? requestedEngine;
   sendJson(res, 200, {
     schemaVersion: "position-card.v1",
-    ...(agentBinding ? { modelConfig: await employeeModelConfig(agentBinding.engine, agentBinding.model, ctx.config.bundledElectronEngine) } : {}),
+    ...(modelEngine ? { modelConfig: await employeeModelConfig(modelEngine, agentBinding?.model, ctx.config.bundledElectronEngine) } : {}),
     ...(agentBinding !== null ? { agentEngine: agentBinding.engine } : {}),
     ...(agentBinding?.locked === true ? { agentLocked: true } : {}),
     position: {
@@ -95,7 +100,11 @@ export async function handlePositionGet(
 
 export async function handlePositionModel(ctx: ControlPlaneContext, req: IncomingMessage, res: ServerResponse, positionId: string): Promise<void> {
   const body = await readJsonBody<unknown>(req);
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || !("model" in body) || typeof body.model !== "string") {
+  if (!body || typeof body !== "object" || Array.isArray(body) ||
+      (Object.keys(body).length !== 1 && Object.keys(body).length !== 2) ||
+      !Object.keys(body).every((key) => key === "model" || key === "engine") ||
+      !("model" in body) || typeof body.model !== "string" ||
+      ("engine" in body && (typeof body.engine !== "string" || !turnEngines.includes(body.engine as TurnEngine)))) {
     throw new OrgApiError(errorCodes.turn_request_invalid, 400, "Expected one model selection");
   }
   if (!ctx.config.bundledElectronEngine) throw new OrgApiError(errorCodes.turn_request_invalid, 400, "This external Agent adapter does not support model selection");
@@ -103,13 +112,18 @@ export async function handlePositionModel(ctx: ControlPlaneContext, req: Incomin
   const release = ctx.runningTurns.reserveMutation(ws.dir, positionId);
   try {
     const existing = await readPositionAgentBinding(ws, positionId);
-    if (!existing) throw new OrgApiError(errorCodes.turn_request_invalid, 400, "An Agent must be bound before choosing its model");
-    const config = await employeeModelConfig(existing.engine, existing.model);
+    const requestedEngine = "engine" in body ? body.engine as TurnEngine : undefined;
+    if (existing && requestedEngine !== undefined && requestedEngine !== existing.engine) {
+      throw new OrgApiError(errorCodes.turn_request_invalid, 400, "Model selection engine does not match this Agent");
+    }
+    const engine = existing?.engine ?? requestedEngine;
+    if (!engine) throw new OrgApiError(errorCodes.turn_request_invalid, 400, "An Agent engine is required before choosing its model");
+    const config = await employeeModelConfig(engine, existing?.model);
     if (!config.options.some((m) => m.id === body.model) && !(config.allowCustomModel && isQoderModelId(body.model))) {
       throw new OrgApiError(errorCodes.turn_request_invalid, 400, "Model is not in this Agent's catalog");
     }
-    await setPositionModel(ws, positionId, body.model);
-    sendJson(res, 200, await employeeModelConfig(existing.engine, body.model));
+    await setPositionModel(ws, positionId, body.model, existing ? undefined : requestedEngine);
+    sendJson(res, 200, await employeeModelConfig(engine, body.model));
   } finally { release(); }
 }
 
