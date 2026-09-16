@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- #275：新增 WorkBuddy（CodeBuddy Code CLI）服务凭据 Host，需要 `CODEBUDDY_API_KEY` 和显式 `CODEBUDDY_MODEL`；仅接受已审计的 2.106.4 / 2.137.1 工具清单。回合隔离本地配置并校验实际空工具/MCP 初始化，修复持久化 WorkBuddy 员工绑定在 renderer 被回退到其他 Host 的问题，补充 IPC、历史回读、打包清单与子进程验收。新增本地模拟 provider 验证脚本；真实 provider 与原生打包验收仍待完成，原生 Windows 当前保持 not-ready。
+
 ## [0.2.0] — 2026-09-15
 
 ### Changed
