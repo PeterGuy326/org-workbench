@@ -7,6 +7,8 @@
 
 ### Added
 
+- #302：新增随仓库版本化的 GitHub 运营员工组织 `examples/github-ops/`：打开该目录即得到「问题调研 / PR 提交 / 合并把关」三个岗位。调研岗负责查重、复现并按模板建 issue；提交岗负责实现改动与提 PR；把关岗只在「存在非作者的批准、该 head 上必需检查全绿、无未解决对话、非 draft」时 squash 合并，合并前一刻重读 head SHA，禁用管理员绕过与 dismiss 他人的变更请求。三者均通过 `Bash` 调用 `gh`，不使用 MCP（内置宿主会以 `qoder.mcp_binding_unsupported` 拒绝员工 MCP 绑定）。注意：岗位包里的 `policy.network` / `policy.filesystem` / `policy.mode` 目前只被记录、不被执行，真正生效的是 `permissions.json` 的工具白名单，因此该员工在 GitHub 上的能力边界由所用凭据决定——建议用独立机器身份的细粒度 PAT，且不要授予 Administration。随附测试守护：声明与包一致（含 digest）、内置引擎能 `org apply`、控制面能打开并供出岗位卡。
+
 - #305：对话选项条新增「新对话」入口：确认后把当前会话轮换进历史并自动挂接后继会话，聊天线程即刻清空，旧对话仍可在会话历史中只读回看；仅当前会话可用，运行中回合与忙碌状态下禁用。
 
 - 顶栏工作区路径条改为可点击：点击后通过新增的 `owb:workspace:reveal` IPC 在系统文件管理器中打开当前工作区目录（macOS Finder / Windows 资源管理器）。main 进程自行向控制面回读已打开的工作区，renderer 全程不传路径；WSL 模式把 Linux 路径映射为与文件夹选择器一致的 `\\wsl.localhost\<distro>\...` 共享路径，映射前拒绝 `..` 穿越与未配置发行版；打开失败给出简短警告。附 workspace-ipc 单测覆盖原生/WSL 映射、工作区未打开、shell 失败与穿越拒绝。
