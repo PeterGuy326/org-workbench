@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type FormEvent } from "react";
-import { Button, Input, Popover, Select, Switch } from "antd";
-import { Check, CircleHelp, Gauge, Layers3, RefreshCw } from "lucide-react";
+import { Button, Input, Popconfirm, Popover, Select, Switch } from "antd";
+import { Check, CircleHelp, Gauge, Layers3, RefreshCw, RotateCw } from "lucide-react";
 import { useT } from "@roleweave/ui";
 import { isQoderModelId } from "@roleweave/shared/model-selection";
 import type { EmployeeModelConfig, EmployeeModelConnection, EmployeeModelOption, WorkbenchSession } from "@roleweave/shared";
@@ -83,12 +83,15 @@ function CustomModelEntry() {
   </div>;
 }
 
-export function ConversationOptions({ config, saving, disabled, loading = false, running = false, error, notice, onReload, session, turns, onModel, onContext }: {
+export function ConversationOptions({ config, saving, disabled, loading = false, running = false, error, notice, onReload, session, turns, onModel, onContext, onRotate }: {
   config?: EmployeeModelConfig; saving: boolean; disabled: boolean;
   loading?: boolean; running?: boolean; error?: string; notice?: string; onReload?: () => void;
   session: WorkbenchSession | null; turns: TurnRecord[];
   onModel?: (model: string) => void | Promise<void>;
   onContext?: (sessionId: string, enabled: boolean) => void | Promise<void>;
+  /** #305 Operator restart: rotate the attached active session into history
+   * and continue on its successor. Absent callers hide the control. */
+  onRotate?: (sessionId: string) => void | Promise<void>;
 }) {
   const t = useT();
   const copy = useConversationCopy();
@@ -211,6 +214,13 @@ export function ConversationOptions({ config, saving, disabled, loading = false,
     }><Button type="text" size="small" icon={<Gauge size={13} />} aria-label={t("model.usageTitle")}>
       {reported.length ? `${total.toLocaleString()}${partial ? "+" : ""} tokens` : t("model.usageUnknown")}
     </Button></Popover>
+    {session && onRotate ? <Popconfirm classNames={popoverClassNames} trigger="click" placement="topRight" title={copy.restartTitle}
+      okText={copy.restartOk} cancelText={copy.restartCancel}
+      onConfirm={() => void onRotate(session.sessionId)}>
+      <Button type="text" size="small" icon={<RotateCw size={13} />} aria-label={copy.restart} disabled={disabled || session.status !== "active"}>
+        {copy.restart}
+      </Button>
+    </Popconfirm> : null}
     </div>
     {(unavailable || notice) ? <div className={`owb-model-picker__state${error ? " is-error" : ""}`}>
       <span role={error ? "alert" : undefined}>{unavailable ?? notice}</span>
