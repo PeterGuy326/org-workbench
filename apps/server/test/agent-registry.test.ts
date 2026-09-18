@@ -32,6 +32,21 @@ function health(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("inherited Object keys are not treated as Agent Host ids", () => {
+  for (const inherited of ["constructor", "toString", "hasOwnProperty"]) {
+    assert.deepEqual(getAgentHostCapabilities({ id: inherited, engine: inherited }), []);
+    assert.equal(agentHostSupportsEmployeeMcp(inherited), false);
+  }
+});
+
+test("Host order is derived from the exhaustive catalog, not a handwritten subset", () => {
+  const hosts = listRegisteredAgentHosts(health());
+  assert.deepEqual(
+    hosts.map((host) => host.id).sort(),
+    ["claude-code", "claude-local", "codex", "codex-local", "qoder", "workbuddy"],
+  );
+});
+
 test("registers every contracted Host from a health snapshot", () => {
   const hosts = listRegisteredAgentHosts(health());
 
