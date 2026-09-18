@@ -31,6 +31,9 @@
 
 - 对话默认使用 Enter 发送时，Ctrl/Command + Enter 可在光标处插入换行或替换选中文字，并保留正确光标位置；保留 Shift + Enter 换行、输入法确认保护和设置中的发送快捷键选择。
 
+- #314：招聘/编辑能力面板在绑定任一 MCP 连接器时给出明确警告——当前全部内置引擎都会在第一回合以 `qoder.mcp_binding_unsupported` 拒绝员工级 MCP，绑定仍可保存，但不再静默让操作员以为该能力已经可用。
+- #243：Agent Host 登记顺序改为从详尽的 `HOST_DEFINITIONS` 派生，新增引擎时不能再静默漏掉。
+
 - #325: The employee card now keeps its per-task and per-day budget declarations visible after turns instead of replacing the declaration with latest-turn usage. Usage remains available in the reports surfaces, where over-budget percentages stay truthful while the visual meter fill is bounded to its track.
 
 - #297：创建数字员工默认先展示 Agent 与基础信息；Agent 草案、头像、权限、能力、记忆、运行模式和预算改为按需展开，保留安全默认值、原有字段校验与 hire 请求 payload。
