@@ -6,8 +6,8 @@
  * callbacks to the shared approval cache. The server resolves the source
  * conversation and constructs the resume turn; the UI never chooses it.
  */
-import { useMemo, useState } from "react";
-import { Alert, Button, List, Segmented, Tag, Tooltip } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Button, Input, List, Select, Segmented, Tag, Tooltip } from "antd";
 import { ArrowRight, Clock3, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useOwbLocale, useT, type OwbT } from "@roleweave/ui";
 import {
@@ -18,10 +18,13 @@ import {
   type ApprovalQueueItem,
 } from "./types";
 import { ApprovalDetailDrawer } from "./ApprovalDetailDrawer";
+import { safeApprovalText } from "./safe-display";
 import { decodeEscapedUnicode } from "../display-text";
 
 export type ApprovalQueueFilter = "pending" | "decided" | "all";
+export type ApprovalExpiryFilter = "all" | "active" | "expiring" | "expired";
 export type ApprovalQueueDataState = "ready" | "not-connected";
+type DesktopNotificationPermission = NotificationPermission | "unsupported";
 
 export interface ApprovalQueueProps extends ApprovalQueueCallbacks {
   items: ApprovalQueueItem[];
@@ -69,6 +72,11 @@ function decisionCssState(item: ApprovalQueueItem): string {
   return item.decision.kind;
 }
 
+function desktopNotificationPermission(): DesktopNotificationPermission {
+  if (typeof window === "undefined" || typeof window.Notification !== "function") return "unsupported";
+  return window.Notification.permission;
+}
+
 export function ApprovalQueue({
   items,
   loading,
@@ -78,10 +86,48 @@ export function ApprovalQueue({
   onNavigateToOrg,
   onApprove,
   onDeny,
+  onOpenSource,
+  onOpenEvidence,
 }: ApprovalQueueProps) {
   const t = useT();
   const [filter, setFilter] = useState<ApprovalQueueFilter>(defaultFilter);
+  const [query, setQuery] = useState("");
+  const [positionFilter, setPositionFilter] = useState<string>();
+  const [categoryFilter, setCategoryFilter] = useState<ApprovalCategory>();
+  const [expiryFilter, setExpiryFilter] = useState<ApprovalExpiryFilter>();
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [notificationPermission, setNotificationPermission] = useState<DesktopNotificationPermission>(desktopNotificationPermission);
+  const notificationSnapshot = useRef<Map<string, { status: ApprovalQueueItem["decision"]["kind"]; expiry: ReturnType<typeof expiryState> }>>();
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const next = new Map(items.map(item => [item.approvalId, { status: item.decision.kind, expiry: expiryState(item, now) }]));
+    const previous = notificationSnapshot.current;
+    notificationSnapshot.current = next;
+    if (!previous || notificationPermission !== "granted" || typeof window.Notification !== "function") return;
+
+    const notify = (title: string, body: string, tag: string) => {
+      try { new window.Notification(title, { body, tag }); } catch { /* BrowserWindow may decline notifications. */ }
+    };
+    for (const item of items) {
+      const before = previous.get(item.approvalId);
+      const position = safeApprovalText(decodeEscapedUnicode(item.positionName ?? t("apr.unknownPosition")));
+      if (!before && item.decision.kind === "pending") {
+        notify(t("apr.notificationNewTitle"), t("apr.notificationNewBody", { position, category: t(`apr.kind.${item.category}`) }), `approval-${item.approvalId}`);
+      } else if (before?.status === "pending" && item.decision.kind !== "pending") {
+        notify(t("apr.notificationDecisionTitle"), t("apr.notificationDecisionBody", { position, status: decisionLabel(item, t) }), `approval-${item.approvalId}`);
+      } else if (before?.expiry !== "expiring" && next.get(item.approvalId)?.expiry === "expiring") {
+        notify(t("apr.notificationExpiryTitle"), t("apr.notificationExpiryBody", { position }), `approval-${item.approvalId}`);
+      }
+    }
+  }, [items, notificationPermission, now, t]);
 
   const pendingCount = useMemo(
     () => items.filter((item) => item.decision.kind === "pending").length,
@@ -89,10 +135,52 @@ export function ApprovalQueue({
   );
 
   const visible = useMemo(() => {
-    if (filter === "pending") return items.filter((item) => !isDecided(item));
-    if (filter === "decided") return items.filter((item) => isDecided(item));
-    return items;
-  }, [items, filter]);
+    const needle = query.trim().toLocaleLowerCase();
+    return items.filter((item) => {
+      if (filter === "pending" && isDecided(item)) return false;
+      if (filter === "decided" && !isDecided(item)) return false;
+      if (positionFilter && item.positionId !== positionFilter) return false;
+      if (categoryFilter && item.category !== categoryFilter) return false;
+      if (expiryFilter && expiryFilter !== "all" && expiryState(item, now) !== expiryFilter) return false;
+      if (fromDate && (!item.requestedAt || item.requestedAt.slice(0, 10) < fromDate)) return false;
+      if (toDate && (!item.requestedAt || item.requestedAt.slice(0, 10) > toDate)) return false;
+      if (needle) {
+        const haystack = [
+          item.positionName,
+          item.positionId,
+          item.category,
+          item.description,
+          item.target,
+          item.requestReason,
+          item.source?.conversationId,
+          item.source?.turnId,
+          item.source?.runId,
+          item.decision.kind,
+          item.decision.kind === "denied" || item.decision.kind === "granted" ? item.decision.reason : undefined,
+          item.executionErrorCode,
+        ].filter(Boolean).join(" ").toLocaleLowerCase();
+        if (!haystack.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [categoryFilter, expiryFilter, filter, fromDate, items, now, positionFilter, query, toDate]);
+
+  const positionOptions = useMemo(() => [...new Map(items.map((item) => [item.positionId, item.positionName ?? item.positionId]))]
+    .sort((a, b) => a[1].localeCompare(b[1])), [items]);
+  const expiringSoonCount = useMemo(() => items.filter(item => expiryState(item, now) === "expiring").length, [items, now]);
+  const hasAdvancedFilters = Boolean(query || positionFilter || categoryFilter || expiryFilter || fromDate || toDate);
+  const clearAdvancedFilters = () => {
+    setQuery("");
+    setPositionFilter(undefined);
+    setCategoryFilter(undefined);
+    setExpiryFilter(undefined);
+    setFromDate("");
+    setToDate("");
+  };
+  const enableDesktopNotifications = async () => {
+    if (typeof window.Notification !== "function") return;
+    try { setNotificationPermission(await window.Notification.requestPermission()); } catch { setNotificationPermission(desktopNotificationPermission()); }
+  };
 
   const selectedItem = useMemo(
     () => items.find((item) => item.approvalId === selectedId) ?? null,
@@ -133,8 +221,79 @@ export function ApprovalQueue({
             aria-label={t("apr.filterStateAria")}
           />
         </div>
-        <span className="owb-approval-queue__count">{t("apr.totalRecords", { count: items.length })}</span>
+        <Input
+          allowClear
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={t("apr.filterKeywordPh")}
+          aria-label={t("apr.filterKeywordAria")}
+          className="owb-approval-queue__search"
+          data-testid="approval-filter-keyword"
+        />
+        <Select
+          allowClear
+          value={positionFilter}
+          onChange={setPositionFilter}
+          placeholder={t("apr.filterPosition")}
+          options={positionOptions.map(([value, label]) => ({ value, label }))}
+          aria-label={t("apr.filterPositionAria")}
+          className="owb-approval-queue__select"
+          data-testid="approval-filter-position"
+        />
+        <Select
+          allowClear
+          value={categoryFilter}
+          onChange={setCategoryFilter}
+          placeholder={t("apr.filterCategory")}
+          options={Object.keys(CATEGORY_TAG_COLOR).map((value) => ({ value, label: t(`apr.kind.${value as ApprovalCategory}`) }))}
+          aria-label={t("apr.filterCategoryAria")}
+          className="owb-approval-queue__select"
+          data-testid="approval-filter-category"
+        />
+        <Select
+          allowClear
+          value={expiryFilter}
+          onChange={setExpiryFilter}
+          placeholder={t("apr.filterExpiry")}
+          options={[
+            { value: "active", label: t("apr.filterExpiryActive") },
+            { value: "expiring", label: t("apr.filterExpirySoon") },
+            { value: "expired", label: t("apr.filterExpiryExpired") },
+          ]}
+          aria-label={t("apr.filterExpiryAria")}
+          className="owb-approval-queue__select"
+          data-testid="approval-filter-expiry"
+        />
+        <Input
+          type="date"
+          value={fromDate}
+          onChange={(event) => setFromDate(event.target.value)}
+          aria-label={t("apr.filterFromAria")}
+          className="owb-approval-queue__date"
+          data-testid="approval-filter-from"
+        />
+        <Input
+          type="date"
+          value={toDate}
+          onChange={(event) => setToDate(event.target.value)}
+          aria-label={t("apr.filterToAria")}
+          className="owb-approval-queue__date"
+          data-testid="approval-filter-to"
+        />
+        {hasAdvancedFilters ? <Button type="link" onClick={clearAdvancedFilters}>{t("apr.clearFilters")}</Button> : null}
+        {notificationPermission === "default" ? <Button type="link" onClick={() => void enableDesktopNotifications()}>{t("apr.enableDesktopNotifications")}</Button> : null}
+        <span className="owb-approval-queue__count">{t("apr.filteredRecords", { visible: visible.length, total: items.length })}</span>
       </div>
+
+      {expiringSoonCount > 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={t("apr.expiryReminder", { count: expiringSoonCount })}
+          action={<Button type="link" size="small" onClick={() => setExpiryFilter("expiring")}>{t("apr.showExpiring")}</Button>}
+          className="owb-approval-queue__banner"
+        />
+      ) : null}
 
       {errorMessage ? (
         <Alert
@@ -172,6 +331,7 @@ export function ApprovalQueue({
             <List.Item className="owb-approval-queue__item">
               <ApprovalCard
                 item={item}
+                now={now}
                 onOpen={() => setSelectedId(item.approvalId)}
               />
             </List.Item>
@@ -185,6 +345,8 @@ export function ApprovalQueue({
         onClose={() => setSelectedId(null)}
         onApprove={onApprove}
         onDeny={onDeny}
+        onOpenSource={onOpenSource}
+        onOpenEvidence={onOpenEvidence}
       />
     </section>
   );
@@ -244,17 +406,19 @@ function ApprovalEmptyState({
 
 interface ApprovalCardProps {
   item: ApprovalQueueItem;
+  now: number;
   onOpen: () => void;
 }
 
-function ApprovalCard({ item, onOpen }: ApprovalCardProps) {
+function ApprovalCard({ item, now, onOpen }: ApprovalCardProps) {
   const t = useT();
   const localeTag = useOwbLocale() === "en" ? "en-US" : "zh-CN";
   const positionName = decodeEscapedUnicode(item.positionName ?? t("apr.unknownPosition"));
-  const description = decodeEscapedUnicode(item.description);
-  const target = item.target ? decodeEscapedUnicode(item.target) : undefined;
+  const description = safeApprovalText(decodeEscapedUnicode(item.description));
+  const target = item.target ? safeApprovalText(decodeEscapedUnicode(item.target)) : undefined;
   const overreach = isPermissionOverreach(item);
   const decided = isDecided(item);
+  const expiringSoon = expiryState(item, now) === "expiring";
   const decisionTagColor = !decided
     ? "blue"
     : item.decision.kind === "granted"
@@ -293,6 +457,7 @@ function ApprovalCard({ item, onOpen }: ApprovalCardProps) {
                 {t("apr.modeTag", { mode: item.positionMode === "read_only" ? t("pos.readOnly") : t("pos.approval") })}
               </Tag>
             ) : null}
+            {expiringSoon ? <Tag color="orange">{t("apr.expiringSoon")}</Tag> : null}
             <Tag color={decisionTagColor}>{decisionLabel(item, t)}</Tag>
           </span>
         </div>
@@ -308,6 +473,7 @@ function ApprovalCard({ item, onOpen }: ApprovalCardProps) {
           </p>
         ) : null}
         <p className="owb-approval-card__meta">
+          {item.requestedAt ? <span>{t("apr.requested", { at: formatApprovalTime(item.requestedAt, t, localeTag) })}</span> : null}
           {item.expiresAt ? (
             <Tooltip title={item.expiresAt}>
               <span className="owb-approval-card__expires">{t("apr.expires", { at: formatApprovalTime(item.expiresAt, t, localeTag) })}</span>
@@ -317,6 +483,15 @@ function ApprovalCard({ item, onOpen }: ApprovalCardProps) {
       </button>
     </article>
   );
+}
+
+function expiryState(item: ApprovalQueueItem, now: number): "active" | "expiring" | "expired" {
+  if (item.decision.kind === "expired") return "expired";
+  if (!item.expiresAt) return "active";
+  const expiresAt = Date.parse(item.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) return "expired";
+  if (item.decision.kind === "pending" && expiresAt <= now + 24 * 60 * 60 * 1000) return "expiring";
+  return "active";
 }
 
 function formatApprovalTime(value: string | undefined, t: OwbT, localeTag: string): string {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApprovalQueue } from "../src/approvals/ApprovalQueue";
 import type { ApprovalQueueItem } from "../src/approvals/types";
@@ -62,6 +62,7 @@ describe("P0 \u5ba1\u6279\u961f\u5217 (\u2461)", () => {
   it("展示层会修复被多编码一层的中文，不修改审批契约字段", () => {
     render(
       <ApprovalQueue
+        defaultFilter="all"
         items={[makeItem({
           positionName: "\\u5185\\u5bb9\\u5199\\u4f5c\\u5458",
           description: "\\u8bf7\\u6c42\\u5199\\u5165 report.md",
@@ -174,5 +175,159 @@ describe("P0 \u5ba1\u6279\u961f\u5217 (\u2461)", () => {
     render(<ApprovalQueue items={items} onApprove={noop} onDeny={noop} />);
     expect(screen.queryByTestId("approval-card-appr-1")).toBeInTheDocument();
     expect(screen.queryByTestId("approval-card-appr-2")).toBeNull();
+  });
+
+  it("filters approval history by keyword and request date", () => {
+    render(
+      <ApprovalQueue
+        defaultFilter="all"
+        items={[
+          makeItem({ approvalId: "appr-write", requestedAt: "2026-09-18T08:00:00.000Z" }),
+          makeItem({ approvalId: "appr-exec", positionId: "operator-2", positionName: "Operations", category: "exec", description: "Run the audit command", requestedAt: "2026-09-17T08:00:00.000Z", decision: { kind: "granted", scope: "once" } }),
+        ]}
+        onApprove={noop}
+        onDeny={noop}
+      />,
+    );
+    expect(screen.getByTestId("approval-card-appr-write")).toBeInTheDocument();
+    expect(screen.getByTestId("approval-card-appr-exec")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("approval-filter-keyword"), { target: { value: "audit command" } });
+    expect(screen.queryByTestId("approval-card-appr-write")).toBeNull();
+    expect(screen.getByTestId("approval-card-appr-exec")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("approval-filter-keyword"), { target: { value: "" } });
+    fireEvent.change(screen.getByTestId("approval-filter-from"), { target: { value: "2026-09-18" } });
+    expect(screen.getByTestId("approval-card-appr-write")).toBeInTheDocument();
+    expect(screen.queryByTestId("approval-card-appr-exec")).toBeNull();
+  });
+
+  it("shows lifecycle and traceability fields and routes supported sources", async () => {
+    const onOpenSource = vi.fn();
+    const onOpenEvidence = vi.fn();
+    render(
+      <ApprovalQueue
+        defaultFilter="all"
+        items={[makeItem({
+          target: "https://alice:secret@example.com/upload?token=top-secret",
+          source: { kind: "session", positionId: "writer-1", conversationId: "session-1", turnId: "turn-1", runId: "run-1", engine: "qoder" },
+          context: {
+            risk: "high", requestedCapability: "write", parameterSummary: "https://[redacted]@example.com/upload?token=[redacted]",
+            impact: "workspace_write", permissions: { mode: "approval_required", allowedTools: ["fs.read"], deniedTools: ["fs.write"] },
+            preview: { status: "unavailable", reason: "engine_preview_not_supplied" },
+          },
+          executionPhase: "completed",
+          executionTurnId: "recovery-1",
+          requestReason: "The requested write changes a shared report.",
+          decision: { kind: "granted", scope: "once", decidedAt: "2026-09-18T09:00:00.000Z", decidedBy: "operator" },
+        })]}
+        onApprove={noop}
+        onDeny={noop}
+        onOpenSource={onOpenSource}
+        onOpenEvidence={onOpenEvidence}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("approval-card-appr-abc"));
+    expect(await screen.findByTestId("approval-lifecycle")).toBeInTheDocument();
+    expect(screen.getByTestId("approval-context")).toBeInTheDocument();
+    expect(screen.getByText("裁决与执行")).toBeInTheDocument();
+    expect(screen.getByText("高风险")).toBeInTheDocument();
+    expect(screen.getByText("引擎未提供")).toBeInTheDocument();
+    expect(screen.getByText("session-1")).toBeInTheDocument();
+    expect(screen.queryByText("top-secret")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "打开原会话" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开执行证据" }));
+    expect(onOpenSource).toHaveBeenCalledWith(expect.objectContaining({ approvalId: "appr-abc" }));
+    expect(onOpenEvidence).toHaveBeenCalledWith(expect.objectContaining({ approvalId: "appr-abc" }));
+  });
+
+  it("keeps unsupported group sources visibly unavailable", async () => {
+    render(
+      <ApprovalQueue
+        items={[makeItem({ source: { kind: "group", positionId: "writer-1", conversationId: "group-1", turnId: "turn-1", runId: "run-1", engine: "qoder" } })]}
+        onApprove={noop}
+        onDeny={noop}
+        onOpenSource={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("approval-card-appr-abc"));
+    expect(await screen.findByText("当前桌面端暂不支持打开此来源。"));
+    expect(screen.getByRole("button", { name: "打开原会话" })).toBeDisabled();
+  });
+
+  it("shows an in-app reminder and supports the expiring filter", () => {
+    render(
+      <ApprovalQueue
+        defaultFilter="all"
+        items={[
+          makeItem({ approvalId: "expiring", expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
+          makeItem({ approvalId: "expired", expiresAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(), decision: { kind: "expired" } }),
+        ]}
+        onApprove={noop}
+        onDeny={noop}
+      />,
+    );
+    expect(screen.getByText("有 1 条待审批将在 24 小时内过期")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看即将过期" }));
+    expect(screen.getByTestId("approval-card-expiring")).toBeInTheDocument();
+    expect(screen.queryByTestId("approval-card-expired")).toBeNull();
+  });
+
+  it("refreshes an approval card's expiry marker on the shared minute tick", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-27T14:00:00.000Z"));
+    try {
+      render(
+        <ApprovalQueue
+          items={[makeItem({ expiresAt: new Date(Date.now() + 60_000).toISOString() })]}
+          onApprove={noop}
+          onDeny={noop}
+        />,
+      );
+      expect(screen.getByText("即将过期")).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(screen.queryByText("即将过期")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends a privacy-safe desktop alert when permission is granted", async () => {
+    const previous = window.Notification;
+    const notify = vi.fn();
+    class TestNotification {
+      static permission: NotificationPermission = "granted";
+      static requestPermission = vi.fn(async () => "granted" as NotificationPermission);
+      constructor(title: string, options?: NotificationOptions) { notify(title, options); }
+    }
+    Object.defineProperty(window, "Notification", { configurable: true, value: TestNotification });
+    try {
+      const { rerender } = render(<ApprovalQueue items={[]} onApprove={noop} onDeny={noop} />);
+      rerender(<ApprovalQueue items={[makeItem({ target: "https://alice:secret@example.com/?token=top-secret" })]} onApprove={noop} onDeny={noop} />);
+      await waitFor(() => expect(notify).toHaveBeenCalledWith(
+        "有新的待审批请求",
+        expect.objectContaining({ body: expect.not.stringContaining("top-secret") }),
+      ));
+    } finally {
+      Object.defineProperty(window, "Notification", { configurable: true, value: previous });
+    }
+  });
+
+  it("requests desktop-notification permission only from the enable action", async () => {
+    const previous = window.Notification;
+    class TestNotification {
+      static permission: NotificationPermission = "default";
+      static requestPermission = vi.fn(async () => "granted" as NotificationPermission);
+    }
+    Object.defineProperty(window, "Notification", { configurable: true, value: TestNotification });
+    try {
+      render(<ApprovalQueue items={[]} onApprove={noop} onDeny={noop} />);
+      expect(TestNotification.requestPermission).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "开启桌面提醒" }));
+      await waitFor(() => expect(TestNotification.requestPermission).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("button", { name: "开启桌面提醒" })).toBeNull();
+    } finally {
+      Object.defineProperty(window, "Notification", { configurable: true, value: previous });
+    }
   });
 });

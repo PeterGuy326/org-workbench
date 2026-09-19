@@ -22,6 +22,7 @@ import {
   type ApprovalQueueCallbacks,
   type ApprovalQueueItem,
 } from "./types";
+import { safeApprovalText } from "./safe-display";
 import { decodeEscapedUnicode } from "../display-text";
 // Mirrors packages/shared/pending-approval.cjs MAX_APPROVAL_REASON_BYTES.
 // Inlined here because the shared module transitively uses `node:module`
@@ -40,6 +41,8 @@ export function ApprovalDetailDrawer({
   onClose,
   onApprove,
   onDeny,
+  onOpenSource,
+  onOpenEvidence,
 }: ApprovalDetailDrawerProps) {
   const t = useT();
   const [reason, setReason] = useState("");
@@ -67,10 +70,17 @@ export function ApprovalDetailDrawer({
   const expired = item.decision.kind === "expired";
   const disabled = decided || expired || item.busy === true || item.canDecide === false || new TextEncoder().encode(reason.trim()).length > MAX_APPROVAL_REASON_BYTES;
   const positionName = decodeEscapedUnicode(item.positionName ?? t("apr.unknownPosition"));
-  const description = decodeEscapedUnicode(item.description);
-  const target = item.target ? decodeEscapedUnicode(item.target) : undefined;
+  const description = safeApprovalText(decodeEscapedUnicode(item.description));
+  const target = item.target ? safeApprovalText(decodeEscapedUnicode(item.target)) : undefined;
   const trimmedReason = reason.trim();
   const reasonForCallback = trimmedReason.length === 0 ? undefined : trimmedReason;
+  const source = item.source;
+  const decidedAt = item.decision.kind === "granted" || item.decision.kind === "denied"
+    ? item.decision.decidedAt
+    : undefined;
+  const decidedBy = item.decision.kind === "granted" || item.decision.kind === "denied"
+    ? item.decision.decidedBy
+    : undefined;
 
   const handleApprove = () => {
     if (disabled) return;
@@ -130,6 +140,86 @@ export function ApprovalDetailDrawer({
             </p>
           </section>
 
+          {item.requestReason ? (
+            <section>
+              <h3 className="owb-approval-drawer__section-title">{t("apr.requestReason")}</h3>
+              <p className="owb-approval-drawer__description">{safeApprovalText(decodeEscapedUnicode(item.requestReason))}</p>
+            </section>
+          ) : null}
+
+          <section data-testid="approval-context">
+            <h3 className="owb-approval-drawer__section-title">{t("apr.context")}</h3>
+            {item.context ? (
+              <>
+                <div className="owb-approval-drawer__meta">
+                  <Tag color={item.context.risk === "high" ? "red" : "orange"}>
+                    {t(`apr.risk.${item.context.risk}`)}
+                  </Tag>
+                </div>
+                <dl className="owb-approval-drawer__references">
+                  <div><dt>{t("apr.requestedCapability")}</dt><dd>{t(`apr.kind.${item.context.requestedCapability}`)}</dd></div>
+                  <div><dt>{t("apr.impact")}</dt><dd>{t(`apr.impact.${item.context.impact}`)}</dd></div>
+                  <div><dt>{t("apr.parameterSummary")}</dt><dd>{item.context.parameterSummary ? safeApprovalText(item.context.parameterSummary) : <span className="owb-muted">{t("apr.contextUnavailable")}</span>}</dd></div>
+                  <div><dt>{t("apr.permissionMode")}</dt><dd>{t(`apr.mode.${item.context.permissions.mode}`)}</dd></div>
+                  <div><dt>{t("apr.allowedTools")}</dt><dd>{item.context.permissions.allowedTools.length > 0 ? item.context.permissions.allowedTools.join(", ") : t("apr.noneDeclared")}</dd></div>
+                  <div><dt>{t("apr.deniedTools")}</dt><dd>{item.context.permissions.deniedTools.length > 0 ? item.context.permissions.deniedTools.join(", ") : t("apr.noneDeclared")}</dd></div>
+                  <div><dt>{t("apr.changePreview")}</dt><dd>{t(`apr.preview.${item.context.preview.status}`)}</dd></div>
+                </dl>
+              </>
+            ) : (
+              <p className="owb-muted">{t("apr.contextUnavailable")}</p>
+            )}
+          </section>
+
+          <section data-testid="approval-lifecycle">
+            <h3 className="owb-approval-drawer__section-title">{t("apr.lifecycle")}</h3>
+            <ol className="owb-approval-drawer__lifecycle">
+              <li className={`is-${item.decision.kind}`}>
+                <strong>{t("apr.lifecycleApproval")}</strong>
+                <span>{t(`apr.status.${item.decision.kind}`)}</span>
+                {decidedAt ? <time>{formatApprovalTimestamp(decidedAt)}</time> : null}
+                {decidedBy ? <small>{t("apr.decidedBy", { actor: decidedBy })}</small> : null}
+              </li>
+              <li className={`is-${item.executionPhase ?? "not_started"}`}>
+                <strong>{t("apr.lifecycleExecution")}</strong>
+                <span>{t(`apr.phase.${item.executionPhase ?? "not_started"}`)}</span>
+                {item.executionErrorCode ? <code>{item.executionErrorCode}</code> : null}
+              </li>
+            </ol>
+          </section>
+
+          <section>
+            <h3 className="owb-approval-drawer__section-title">{t("apr.traceability")}</h3>
+            {source ? (
+              <dl className="owb-approval-drawer__references">
+                <div><dt>{t("apr.sourceType")}</dt><dd>{t(`apr.source.${source.kind}`)}</dd></div>
+                <div><dt>{t("apr.sourceConversation")}</dt><dd><code>{source.conversationId}</code></dd></div>
+                <div><dt>{t("apr.sourceTurn")}</dt><dd><code>{source.turnId}</code></dd></div>
+                <div><dt>{t("apr.sourceRun")}</dt><dd><code>{source.runId}</code></dd></div>
+                {item.executionTurnId ? <div><dt>{t("apr.executionTurn")}</dt><dd><code>{item.executionTurnId}</code></dd></div> : null}
+              </dl>
+            ) : (
+              <p className="owb-muted">{t("apr.referencesUnavailable")}</p>
+            )}
+            <Space wrap>
+              <Button
+                type="link"
+                disabled={!source || source.kind !== "session" || !onOpenSource}
+                onClick={() => source && onOpenSource?.(item)}
+              >
+                {t("apr.openSource")}
+              </Button>
+              <Button
+                type="link"
+                disabled={!onOpenEvidence}
+                onClick={() => onOpenEvidence?.(item)}
+              >
+                {t("apr.openEvidence")}
+              </Button>
+            </Space>
+            {source && source.kind !== "session" ? <p className="owb-muted">{t("apr.sourceUnavailable")}</p> : null}
+          </section>
+
           {decided ? (
             <Alert
               type={item.decision.kind === "granted" ? "success" : item.decision.kind === "denied" ? "error" : "info"}
@@ -142,7 +232,7 @@ export function ApprovalDetailDrawer({
               }
               description={
                 item.decision.kind === "denied" && item.decision.reason
-                  ? t("apr.reasonPrefix", { reason: item.decision.reason })
+                  ? t("apr.reasonPrefix", { reason: safeApprovalText(item.decision.reason) })
                   : undefined
               }
               showIcon
@@ -182,7 +272,6 @@ export function ApprovalDetailDrawer({
               {t("apr.deny")}
             </Button>
           </div>
-          {item.requestReason ? <p>{item.requestReason}</p> : null}
           {item.executionPhase && item.executionPhase !== "not_started" ? <Alert type="info" showIcon message={t(`apr.phase.${item.executionPhase}`)} /> : null}
           {item.canDecide === false && !decided ? <Alert type="warning" message={t(`apr.unavailable.${item.unavailableReason ?? "unknown"}`)} /> : null}
           {new TextEncoder().encode(reason.trim()).length > MAX_APPROVAL_REASON_BYTES ? <Alert type="warning" message={t("apr.reasonTooLong")} /> : null}
@@ -195,6 +284,11 @@ export function ApprovalDetailDrawer({
 }
 
 function formatApprovalExpiry(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString([], { hour12: false });
+}
+
+function formatApprovalTimestamp(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString([], { hour12: false });
 }
