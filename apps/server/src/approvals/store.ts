@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { OrgApiError, errorCodes, isApprovalChangePreview, turnEngines, validatePendingApproval, type ApprovalRecord } from "@roleweave/shared";
+import { OrgApiError, errorCodes, isApprovalChangePreview, isApprovalScopeOffer, turnEngines, validatePendingApproval, type ApprovalRecord } from "@roleweave/shared";
 import { approvalPreviewFingerprintInput } from "@roleweave/shared";
 import { atomicWriteJson, nodeAtomicTurnWriteOperations } from "../turns/store.js";
 import { projectApprovalPreview } from "./context.js";
@@ -81,6 +81,7 @@ function valid(value: unknown): value is ApprovalRecord {
       ![s.positionId, s.conversationId, s.turnId, s.runId, a.approvalId].every(text) || !turnEngines.includes(s.engine) ||
       a.id !== approvalIdentity(s, a.approvalId) || !a.action || !["write", "exec", "network", "tool"].includes(a.action.kind) ||
       !text(a.action.description) || (a.action.target !== undefined && !text(a.action.target)) ||
+      (a.action.scope !== undefined && !isApprovalScopeOffer(a.action.scope)) ||
       (a.requestReason !== undefined && !text(a.requestReason)) || !time(a.requestedAt) || !time(a.createdAt) || !time(a.updatedAt) ||
       (a.expiresAt !== undefined && !time(a.expiresAt)) ||
       !["pending", "granted", "denied", "expired", "cancelled", "indeterminate"].includes(a.status) ||
@@ -90,7 +91,7 @@ function valid(value: unknown): value is ApprovalRecord {
   if (a.decision) {
     const d = a.decision;
     if (!/^[a-f0-9-]{36}$/.test(d.requestId) || !Number.isSafeInteger(d.expectedVersion) || d.expectedVersion < 1 ||
-        !time(d.decidedAt) || d.scope !== "once" || d.decision !== a.status ||
+        !time(d.decidedAt) || (d.scope !== "once" && d.scope !== "run") || d.decision !== a.status ||
         !validatePendingApproval({ approvalId: a.approvalId, decision: d.decision, decidedBy: d.decidedBy, scope: d.scope, ...(d.reason === undefined ? {} : { reason: d.reason }) }).ok) return false;
   }
   if (a.context !== undefined) {
@@ -109,6 +110,9 @@ function valid(value: unknown): value is ApprovalRecord {
       ? { status: "unavailable", reason: "engine_preview_not_supplied" }
       : projectApprovalPreview(a.action.preview);
     if (!isDeepStrictEqual(c.preview, expectedPreview)) return false;
+    if (!Array.isArray(c.scope.allowed) || c.scope.allowed.length < 1 || c.scope.allowed.length > 2 ||
+        c.scope.allowed[0] !== "once" || new Set(c.scope.allowed).size !== c.scope.allowed.length ||
+        c.scope.allowed.some(scope => scope !== "once" && scope !== "run")) return false;
   }
   return true;
 }

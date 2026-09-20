@@ -150,6 +150,7 @@ test("approval store retains legacy records with unsanitized preview text", asyn
       risk: "high" as const, requestedCapability: "write" as const, parameterSummary: "token=old",
       impact: "workspace_write" as const,
       permissions: { mode: "approval_required" as const, allowedTools: [], deniedTools: [] },
+      scope: { allowed: ["once"] as Array<"once" | "run"> },
       preview: { status: "available" as const, ...preview, previewFingerprint,
         files: [{ path: "report.md", change: "modify" as const, before: "token=[redacted]", after: "token=[redacted]" }] },
     },
@@ -186,6 +187,7 @@ test("approval store rejects a context preview that does not project from the ac
     context: {
       risk: "high" as const, requestedCapability: "write" as const, impact: "workspace_write" as const,
       permissions: { mode: "approval_required" as const, allowedTools: [], deniedTools: [] },
+      scope: { allowed: ["once"] as Array<"once" | "run"> },
       preview: { status: "available" as const, ...preview, previewFingerprint,
         files: [{ path: "forged.md", change: "modify" as const, before: "old", after: "new" }] },
     },
@@ -209,7 +211,7 @@ test("CLI driver mirrors the engine.v1 approval events verbatim into a trusted s
       ...base,
       type: "approval.requested",
       approvalId: "appr-1",
-      action: { kind: "exec", description: "rm -rf build", target: "scripts/clean.sh" },
+      action: { kind: "exec", description: "rm -rf build", target: "scripts/clean.sh", scope: { version: "approval-scope-offer.v1", allowed: ["once", "run"], runBinding: "sha256:${"0".repeat(64)}" } },
       reason: "destructive command",
       expiresAt: "2026-08-24T01:00:00.000Z",
     }));
@@ -240,6 +242,7 @@ test("CLI driver mirrors the engine.v1 approval events verbatim into a trusted s
       kind: "exec",
       description: "rm -rf build",
       target: "scripts/clean.sh",
+      scope: { version: "approval-scope-offer.v1", allowed: ["once", "run"], runBinding: `sha256:${"0".repeat(64)}` },
     });
     assert.equal(requested.reason, "destructive command");
     assert.equal(requested.expiresAt, "2026-08-24T01:00:00.000Z");
@@ -283,6 +286,11 @@ test("CLI driver fails closed on malformed approval events without faking a term
     JSON.stringify({
       runId: "run-1", timestamp: "2026-08-24T00:00:00.000Z", type: "approval.requested",
       approvalId: "appr-1", action: { kind: "spawn", description: "run" },
+    }),
+    // A run offer without an exact binding is unsafe.
+    JSON.stringify({
+      runId: "run-1", timestamp: "2026-08-24T00:00:00.000Z", type: "approval.requested",
+      approvalId: "appr-1", action: { kind: "exec", description: "run", scope: { version: "approval-scope-offer.v1", allowed: ["once", "run"] } },
     }),
     // approvalId beyond the 256 bound
     JSON.stringify({

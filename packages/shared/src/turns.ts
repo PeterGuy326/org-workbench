@@ -4,6 +4,7 @@
  * package only adds workbench-local persistence records.
  */
 import { createRequire } from "node:module";
+import type { ApprovalScopeOffer } from "./approval-scope.js";
 import type { ApprovalChangePreview } from "./approval-preview.js";
 import type { TurnAttachment } from "./attachments.js";
 
@@ -73,6 +74,8 @@ export interface ApprovalRequestedEvent extends EngineEventBase {
     kind: TurnApprovalActionKind;
     description: string;
     target?: string;
+    /** Engine-declared scope eligibility; absent means once only. */
+    scope?: ApprovalScopeOffer;
     /** Optional, integrity-bound display preview for write-like actions. */
     preview?: ApprovalChangePreview;
   };

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import { isApprovalScopeOffer } from "@roleweave/shared";
 import type {
   EngineOrgApplySuccess,
   EngineEvent,
@@ -239,7 +240,7 @@ function parseEngineEvent(line: string): EngineEvent {
       if (!isRecord(unknownEvent.action)) {
         throw new EngineProtocolError("engine.v1 approval.requested action is invalid");
       }
-      exactKeys(unknownEvent.action, ["kind", "description"], ["target", "preview"]);
+      exactKeys(unknownEvent.action, ["kind", "description"], ["target", "preview", "scope"]);
       if (
         !boundedApprovalId(unknownEvent.approvalId) ||
         !APPROVAL_ACTION_KINDS.has(unknownEvent.action.kind as string) ||
@@ -249,7 +250,8 @@ function parseEngineEvent(line: string): EngineEvent {
         !hasBoundPreview(unknownEvent.approvalId, unknownEvent.action) ||
         (unknownEvent.reason !== undefined &&
           !boundedNonEmptyText(unknownEvent.reason, APPROVAL_DESCRIPTION_MAX_BYTES)) ||
-        !optionalIsoTimestamp(unknownEvent.expiresAt)
+        !optionalIsoTimestamp(unknownEvent.expiresAt) ||
+        (unknownEvent.action.scope !== undefined && !isApprovalScopeOffer(unknownEvent.action.scope))
       ) {
         throw new EngineProtocolError("engine.v1 approval.requested fields are invalid or unbounded");
       }
@@ -262,6 +264,9 @@ function parseEngineEvent(line: string): EngineEvent {
           description: unknownEvent.action.description,
           ...(unknownEvent.action.target !== undefined
             ? { target: unknownEvent.action.target }
+            : {}),
+          ...(unknownEvent.action.scope !== undefined
+            ? { scope: unknownEvent.action.scope }
             : {}),
           ...(unknownEvent.action.preview !== undefined
             ? { preview: unknownEvent.action.preview as import("@roleweave/shared").ApprovalChangePreview }

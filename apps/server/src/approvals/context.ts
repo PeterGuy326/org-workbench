@@ -51,5 +51,6 @@ export function buildApprovalContext(
     preview: action.preview
       ? projectApprovalPreview(action.preview)
       : { status: "unavailable", reason: "engine_preview_not_supplied" },
+    scope: { allowed: action.scope?.allowed ?? ["once"] },
   };
 }

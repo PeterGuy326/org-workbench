@@ -54,6 +54,7 @@ export interface TurnApprovalRequest {
   kind: string;
   description: string;
   target?: string;
+  scopeAllowed?: Array<"once" | "run">;
   expiresAt?: string;
 }
 
