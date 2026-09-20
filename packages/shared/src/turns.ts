@@ -5,6 +5,7 @@
  */
 import { createRequire } from "node:module";
 import type { ApprovalChangePreview } from "./approval-preview.js";
+import type { TurnAttachment } from "./attachments.js";
 
 export const TURN_ENVELOPE_SCHEMA_VERSION = "turn-envelope.v1" as const;
 /** Upstream de#205 (DE-CONVREF-001): v1alpha2 = v1 + optional conversationRef. */
@@ -221,6 +222,8 @@ export interface TurnRecord {
    * contributes to a specific goal branch's progress. */
   goalId?: string;
   branchId?: string;
+  /** Additive #306: optional attachment manifest. Absent for pre-attachment records. */
+  attachments?: TurnAttachment[];
 }
 
 export interface TurnHistory {
