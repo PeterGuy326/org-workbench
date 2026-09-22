@@ -357,6 +357,11 @@ test("HTTP work item edits persist bounded plans across store reloads and preser
     const persisted = await new GoalStore().get(workspace, goalId);
     assert.deepEqual(persisted.workItems, workItems);
     assert.notEqual(persisted.updatedAt, initial.updatedAt);
+    const listed = await api(server.baseUrl, routes.goals, { token: server.token });
+    assert.equal(listed.status, 200);
+    const summary = (listed.body as { goals: Record<string, unknown>[] }).goals[0]!;
+    assert.equal(summary.goalId, goalId);
+    assert.equal(Object.hasOwn(summary, "workItems"), false, "list responses must not include full task descriptions");
     const detail = await api(server.baseUrl, `${routes.goals}/${goalId}`, { token: server.token });
     assert.deepEqual((detail.body as GoalDetail).goal.workItems, workItems);
     const rejected = await api(server.baseUrl, `${routes.goals}/${goalId}`, {

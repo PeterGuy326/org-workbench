@@ -102,7 +102,7 @@ export interface GoalActivity {
   createdAt: string;
 }
 
-export type GoalSummary = Omit<Goal, "branches"> & { branchCount: number };
+export type GoalSummary = Omit<Goal, "branches" | "workItems"> & { branchCount: number };
 
 export interface GoalDetail {
   goal: Goal;

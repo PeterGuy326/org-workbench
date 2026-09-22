@@ -1,6 +1,8 @@
-# Project planning in Goals
+# Project management
 
-Open a workspace, choose **Goals**, and create or select a goal. Each goal is a project with its own task board and schedule. Existing goal descriptions, acceptance criteria, branches, and activity remain available under **Project brief & activity**.
+Open a workspace, choose the independent **Project management** module in the navigation rail, and create or select a project. Each project has its own task board and schedule. Its brief, acceptance criteria, branches, and activity remain available under **Project brief & activity**.
+
+The **Goals** module keeps its existing goal overview. Project management reuses the same durable goal records and execution links, so project plans remain connected to their objectives without duplicating their data.
 
 ## Plan and track work
 
@@ -14,7 +16,7 @@ Open a workspace, choose **Goals**, and create or select a goal. Each goal is a 
 
 Assign a task to a position with an Agent engine configured in the organization, then use the task's Run action. This starts an immediate turn through the existing execution API. A busy position can reject the request; a rejected request is shown as an error, not a successful queue entry.
 
-The task displays its latest associated execution separately from its planning stage. A completed turn does not automatically mark the task Done. Failed and indeterminate runs remain visible. Execution information refreshes when the project reloads and every 15 seconds while Goals is open. Unavailable execution history is identified explicitly.
+The task displays its latest associated execution separately from its planning stage. A completed turn does not automatically mark the task Done. Failed and indeterminate runs remain visible. Execution information refreshes when the project reloads and every 15 seconds while Project management is open. Unavailable execution history is identified explicitly.
 
 Execution links are scoped by goal, task, and assigned position. Reassigning a task does not present the previous position's run as the new assignee's work. The projection contains execution metadata only; task descriptions and output are not copied into the execution summary.
 
@@ -28,7 +30,7 @@ The new application reads old goal records with no task field. Older application
 
 ## Reviewer checks
 
-1. Create a goal and add tasks with assigned/unassigned positions, all five stages, and both complete and partial date ranges. Reload Goals and verify persistence.
+1. Create a goal and add tasks with assigned/unassigned positions, all five stages, and both complete and partial date ranges. Reload Project management and verify persistence.
 2. Change a card's stage and edit its dates. Verify completion, blocked, overdue, search, and owner filtering. Verify a start date after its due date cannot be saved.
 3. Open Schedule, move between four-week periods, and verify one-date and undated tasks remain visible.
 4. Edit the same goal from two snapshots. The second stale save must return a conflict and keep its draft.

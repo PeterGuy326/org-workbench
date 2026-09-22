@@ -152,7 +152,7 @@ async function readBoundedJson(file: string, maxBytes: number): Promise<unknown>
 }
 
 function toSummary(goal: Goal): GoalSummary {
-  const { branches: _, ...rest } = goal;
+  const { branches: _, workItems: _workItems, ...rest } = goal;
   return { ...rest, branchCount: goal.branches.length };
 }
 
