@@ -9,11 +9,16 @@ import {
   type GoalStatus,
   type GoalSummary,
 } from "@roleweave/shared/goals";
+import type { TurnEngine } from "@roleweave/shared";
+import { ProjectBoard } from "./ProjectBoard.js";
+import "./goals-project.css";
 import { GoalCreateDialog } from "./GoalCreateDialog.js";
 
 interface GoalsModuleProps {
   workspaceOpen: boolean;
   workspaceKey?: string;
+  positionNames?: Record<string, string>;
+  positionEngines?: Record<string, TurnEngine>;
 }
 const rememberedSelection = new Map<string, string>();
 const STATUS_BADGE: Record<string, string> = {
@@ -46,7 +51,7 @@ export function GoalsModule(props: GoalsModuleProps) {
   );
 }
 
-function GoalsWorkspace({ workspaceOpen, workspaceKey }: GoalsModuleProps) {
+function GoalsWorkspace({ workspaceOpen, workspaceKey, positionNames = {}, positionEngines = {} }: GoalsModuleProps) {
   const t = useT();
   const [goals, setGoals] = useState<GoalSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(() =>
@@ -131,7 +136,6 @@ function GoalsWorkspace({ workspaceOpen, workspaceKey }: GoalsModuleProps) {
   const loadDetail = useCallback(
     async (goalId: string) => {
       const version = ++detailVersion.current;
-      setDetail(null);
       setDetailError(null);
       try {
         const response = await window.owb.goal(goalId);
@@ -178,6 +182,15 @@ function GoalsWorkspace({ workspaceOpen, workspaceKey }: GoalsModuleProps) {
       }
     });
   }, [workspaceOpen, loadGoals, loadDetail]);
+
+  // Refresh execution evidence without unmounting an open task editor.
+  useEffect(() => {
+    if (!workspaceOpen) return;
+    const timer = window.setInterval(() => {
+      if (selectedRef.current) void loadDetail(selectedRef.current);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [workspaceOpen, loadDetail]);
 
   const changeStatus = async (status: GoalStatus) => {
     const id = selectedRef.current;
@@ -269,7 +282,7 @@ function GoalsWorkspace({ workspaceOpen, workspaceKey }: GoalsModuleProps) {
     </AntButton>
   );
   return (
-    <section className="owb-goals-module" aria-label={t("goals.moduleAria")}>
+    <section className="owb-goals-module owb-goals-module--project" aria-label={t("goals.moduleAria")}>
       <header className="owb-module-header">
         <h1>{t("goals.title")}</h1>
         {workspaceOpen && (
@@ -468,6 +481,18 @@ function GoalsWorkspace({ workspaceOpen, workspaceKey }: GoalsModuleProps) {
                         {actionError}
                       </p>
                     )}
+                    <ProjectBoard
+                      key={detail.goal.goalId}
+                      detail={detail}
+                      positionNames={positionNames}
+                      positionEngines={positionEngines}
+                      onRefresh={async () => {
+                        const goalId = selectedRef.current;
+                        await Promise.all([loadGoals(), goalId ? loadDetail(goalId) : Promise.resolve()]);
+                      }}
+                    />
+                    <details className="owb-project-overview">
+                      <summary>{t("project.overview")}</summary>
                     <section>
                       <h3>{t("goals.descField")}</h3>
                       <p className="owb-goals-detail__desc">
@@ -519,6 +544,7 @@ function GoalsWorkspace({ workspaceOpen, workspaceKey }: GoalsModuleProps) {
                         ))}
                       </ol>
                     </section>
+                    </details>
                   </div>
                 )}
               </aside>

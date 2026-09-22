@@ -29,6 +29,7 @@ import type {
   GoalDetail,
   GoalSummary,
   GoalsCreateResponse,
+  GoalsUpdateRequest,
   HealthResponse,
   QoderLoginResponse,
   ChangeManifest,
@@ -119,7 +120,7 @@ export interface OwbBridge {
   assetsList(): Promise<OwbApiResponse<AssetsListResponse>>;
   assetsRead(assetId: string): Promise<OwbApiResponse<AssetRecord>>;
   assetsCreate(request: AssetsCreateRequest): Promise<OwbApiResponse<AssetRecord>>;
-  createTurn(request: { positionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval }): Promise<OwbApiResponse<TurnRecord>>;
+  createTurn(request: { positionId: string; input: string; engine: TurnEngine; pendingApproval?: TurnPendingApproval; goalId?: string; branchId?: string }): Promise<OwbApiResponse<TurnRecord>>;
   cancelTurn(request: string | CancelTurnRequest): Promise<OwbApiResponse<{ cancelled: boolean; positionId: string }>>;
   turnHistory(positionId: string): Promise<OwbApiResponse<TurnHistory>>;
   createSession(request: { positionId: string }): Promise<OwbApiResponse<WorkbenchSession>>;
@@ -153,7 +154,7 @@ export interface OwbBridge {
   createGoal(request: { title: string; description: string; acceptanceCriteria?: string[] }): Promise<OwbApiResponse<GoalsCreateResponse>>;
   goals(): Promise<OwbApiResponse<{ goals: GoalSummary[] }>>;
   goal(goalId: string): Promise<OwbApiResponse<GoalDetail>>;
-  updateGoal(request: { goalId: string; title?: string; description?: string; acceptanceCriteria?: string[]; status?: string; health?: string }): Promise<OwbApiResponse<{ goalId: string }>>;
+  updateGoal(request: GoalsUpdateRequest & { goalId: string }): Promise<OwbApiResponse<{ goalId: string }>>;
   deleteGoal(goalId: string): Promise<OwbApiResponse<{ goalId: string; deleted: boolean }>>;
   drive: {
     list(q?: string): Promise<OwbApiResponse<DriveObjectListResponse>>;
