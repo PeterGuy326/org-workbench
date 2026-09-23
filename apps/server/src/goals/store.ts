@@ -23,7 +23,7 @@ import { StableReadError, decodeStableUtf8, readStableBoundedFile } from "../sta
 import { atomicWriteJson, nodeAtomicTurnWriteOperations } from "../turns/store.js";
 import type { TurnRecord } from "@roleweave/shared";
 
-const GOAL_ROOT_SEGMENTS = [".digital-employee", "workbench", "goals"];
+const GOAL_ROOT_SEGMENTS = [".roleweave", "goals"];
 const MAX_GOALS = 64;
 // 64 bounded work items can exceed the previous 32 KiB record size.
 const MAX_GOAL_RECORD_BYTES = 2 * 1024 * 1024;
@@ -101,7 +101,7 @@ async function ensureRealDirectories(workspace: string): Promise<void> {
         throw goalError("local goal directory creation raced with an unsafe path");
       }
     }
-    if (segment !== ".digital-employee") await fs.chmod(current, 0o700);
+    if (segment !== ".roleweave") await fs.chmod(current, 0o700);
   }
 }
 

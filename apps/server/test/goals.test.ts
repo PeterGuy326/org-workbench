@@ -493,7 +493,7 @@ test("health refresh preserves concurrent task edits and list consistency withou
     const { goalId } = await createGoal(server.baseUrl, server.token);
     const goal = await server.ctx.goalStore.get(workspace, goalId);
     const branched = { ...goal, workItems: [plannedTask], health: "on_track", branches: [{ branchId: "main", title: "Main", status: "open", createdAt: goal.createdAt, updatedAt: goal.updatedAt }] };
-    const file = path.join(workspace, ".digital-employee", "workbench", "goals", goalId, "goal.json");
+    const file = path.join(workspace, ".roleweave", "goals", goalId, "goal.json");
     await fs.writeFile(file, JSON.stringify(branched));
     const changedTask = { ...plannedTask, title: "Edited task title" };
     const [refreshed, staleEdit] = await Promise.allSettled([
