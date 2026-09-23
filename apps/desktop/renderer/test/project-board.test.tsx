@@ -269,6 +269,68 @@ describe("ProjectBoard", () => {
     ).toBeEnabled();
   });
 
+  it.each(["all", "unassigned"])(
+    "filters the supported position ID %s separately from special filter options",
+    (positionId) => {
+      setup(
+        detail([
+          {
+            ...task,
+            taskId: "reserved-owner",
+            title: "Assigned work",
+            assigneePositionId: positionId,
+          },
+          {
+            ...task,
+            taskId: "other-owner",
+            title: "Other employee work",
+            assigneePositionId: "engineer",
+          },
+          {
+            ...task,
+            taskId: "no-owner",
+            title: "Unassigned work",
+            assigneePositionId: undefined,
+          },
+        ]),
+      );
+      const filter = screen.getByRole("combobox", { name: "筛选负责人" });
+      const assignedOption = within(filter).getByRole("option", {
+        name: positionId,
+        exact: true,
+      }) as HTMLOptionElement;
+      fireEvent.change(filter, { target: { value: assignedOption.value } });
+      expect(
+        screen.getByRole("article", { name: "Assigned work" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("article", { name: "Other employee work" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("article", { name: "Unassigned work" }),
+      ).not.toBeInTheDocument();
+
+      const unassignedOption = within(filter).getByRole("option", {
+        name: "未分配",
+        exact: true,
+      }) as HTMLOptionElement;
+      fireEvent.change(filter, { target: { value: unassignedOption.value } });
+      expect(
+        screen.getByRole("article", { name: "Unassigned work" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("article", { name: "Assigned work" }),
+      ).not.toBeInTheDocument();
+
+      const allOption = within(filter).getByRole("option", {
+        name: "全部负责人",
+        exact: true,
+      }) as HTMLOptionElement;
+      fireEvent.change(filter, { target: { value: allOption.value } });
+      expect(screen.getAllByRole("article")).toHaveLength(3);
+    },
+  );
+
   it("filters tasks and shows partial dates without inventing a duration", () => {
     setup(
       detail([
@@ -282,9 +344,12 @@ describe("ProjectBoard", () => {
         },
       ]),
     );
-    fireEvent.change(screen.getByRole("combobox", { name: "筛选负责人" }), {
-      target: { value: "designer" },
-    });
+    const ownerFilter = screen.getByRole("combobox", { name: "筛选负责人" });
+    const designerOption = within(ownerFilter).getByRole("option", {
+      name: "Designer",
+      exact: true,
+    }) as HTMLOptionElement;
+    fireEvent.change(ownerFilter, { target: { value: designerOption.value } });
     expect(
       screen.queryByRole("article", { name: "Ship board" }),
     ).not.toBeInTheDocument();

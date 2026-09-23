@@ -122,7 +122,7 @@ export function ProjectBoard({
       (owner === "all" ||
         (owner === "unassigned"
           ? !item.assigneePositionId
-          : item.assigneePositionId === owner))
+          : owner === `position:${item.assigneePositionId ?? ""}`))
     );
   });
   const ownerIds = Array.from(
@@ -499,7 +499,7 @@ export function ProjectBoard({
           <option value="all">{t("project.allOwners")}</option>
           <option value="unassigned">{t("project.unassigned")}</option>
           {ownerIds.map((id) => (
-            <option value={id} key={id}>
+            <option value={`position:${id}`} key={id}>
               {own(positionNames, id) ?? id}
             </option>
           ))}
